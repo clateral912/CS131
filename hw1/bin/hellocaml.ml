@@ -97,7 +97,7 @@ let another_int : int = 3 * 14
    For example, it is an error to add a float and an int:
 *)
 (* Uncomment to get a type error: *)
-(*
+(* 
    let an_error : int = 3 + 1.0
 *) 
 
@@ -350,10 +350,10 @@ let quadrupled_z_again : int = twice double z (* pass double to twice *)
    makes the first case of part1_tests "Problem 1" succeed. See the
    gradedtests.ml file.
 *)
-let pieces : int = -1
+let pieces : int = 1
 
 (* Implement a function cube that takes an int value and produces its cube. *)
-let cube : int -> int = fun _ -> failwith "cube unimplemented"
+let cube : int -> int = fun (x: int) -> x * x * x
 
 (* Problem 1-2 *)
 (*
@@ -366,7 +366,7 @@ let cube : int -> int = fun _ -> failwith "cube unimplemented"
    and computes the total value of the coins in cents:
 *)
 let cents_of : int -> int -> int -> int -> int =
-   fun _ -> failwith "cents_of unimplemented"
+   fun (q: int)(d: int)(n: int)(p: int) -> q * 25 + d * 10 + n * 5 + p
 
 (* Problem 1-3 *)
 (*
@@ -508,7 +508,7 @@ let pair_up (x : 'a) : 'a * 'a = (x, x)
    Complete the definition of third_of_three; be sure to give it
    the correct type signature (we will grade that part manually):
 *)
-let third_of_three _ = failwith "third_of_three unimplemented"
+let third_of_three (t: 'a * 'b * 'c) : 'c = match t with _, _, z -> z
 
 (*
   Problem 2-2
@@ -520,7 +520,7 @@ let third_of_three _ = failwith "third_of_three unimplemented"
 *)
 
 let compose_pair (p : ('b -> 'c) * ('a -> 'b)) : 'a -> 'c =
-  failwith "compose_pair unimplemented"
+  match p with g, f -> fun(x: 'a) -> g(f x)
 
 (******************************************************************************)
 (*                                                                            *)
@@ -649,7 +649,7 @@ let is_sorted_ans2 : bool = is_sorted [ 1; 3; 2 ] (* false *)
    Here is map, one of the most useful:
 *)
 let rec map (f : 'a -> 'b) (l : 'a list) : 'b list =
-  match l with [] -> [] | h :: tl -> f h :: map f tl
+  match l with [] -> [] | h :: tl -> (f h) :: (map f tl)
 
 let map_ans1 : int list = map double [ 1; 2; 3 ] (* evaluates to [2;4;6]  *)
 
@@ -673,7 +673,7 @@ let rec mylist_to_list (l : 'a mylist) : 'a list =
   the inverse of the mylist_to_list function given above.
 *)
 let rec list_to_mylist (l : 'a list) : 'a mylist =
-  failwith "list_to_mylist unimplemented"
+  match l with [] -> Nil | h :: tl -> Cons (h, (list_to_mylist tl))
 
 (*
   Problem 3-2
@@ -689,7 +689,11 @@ let rec list_to_mylist (l : 'a list) : 'a mylist =
   append.  So (List.append [1;2] [3]) is the same as  ([1;2] @ [3]).
 *)
 let rec append (l1 : 'a list) (l2 : 'a list) : 'a list =
-  failwith "append unimplemented"
+  match l1, l2 with
+  | [], [] -> []
+  | _, [] -> l1
+  | [], _ -> l2
+  | x :: xs, _ -> x :: append xs l2
 
 (*
   Problem 3-3
@@ -698,7 +702,9 @@ let rec append (l1 : 'a list) (l2 : 'a list) : 'a list =
   you might want to call append.  Do not use the library function.
 *)
 let rec rev (l : 'a list) : 'a list =
-  failwith "rev unimplemented"
+  match l with 
+  | [] -> []
+  | h :: tl -> append (rev tl) [h]
 
 (*
   Problem 3-4
@@ -710,7 +716,15 @@ let rec rev (l : 'a list) : 'a list =
   OCaml will compile a tail recursive function to a simple loop.
 *)
 let rev_t (l : 'a list) : 'a list =
-  failwith "rev_t unimplemented"
+  let rec rev_tail (l1: 'a list) (l2: 'a list) : 'a list = 
+    match l2 with
+    | [] -> l1
+    | h::tl -> rev_tail (h :: l1) tl
+
+  in
+    rev_tail [] l
+
+
 
 (*
   Problem 3-5
@@ -726,7 +740,16 @@ let rev_t (l : 'a list) : 'a list =
   evaluates to true or false.
 *)
 let rec insert (x : 'a) (l : 'a list) : 'a list =
-  failwith "insert unimplemented"
+  match l with
+  | [] -> [x]
+  | h::tl -> 
+      if h < x 
+        then 
+        h :: insert x tl 
+        else 
+          if h = x 
+            then l 
+            else x :: h :: tl 
 
 (*
   Problem 3-6
@@ -736,7 +759,9 @@ let rec insert (x : 'a) (l : 'a list) : 'a list =
   Hint: you might want to use the insert function that you just defined.
 *)
 let rec union (l1 : 'a list) (l2 : 'a list) : 'a list =
-   failwith "union unimplemented"
+  match l2 with 
+  | [] -> l1
+  | h::tl -> union (insert h l1) tl
 
 (******************************************************************************)
 (*                                                                            *)
@@ -822,7 +847,12 @@ let e3 : exp = Mult (Var "y", Mult (e2, Neg e2)) (* "y * ((x+1) * -(x+1))" *)
   Hint: you probably want to use the 'union' function you wrote for Problem 3-5.
 *)
 let rec vars_of (e : exp) : string list =
-  failwith "vars_of unimplemented"
+  match e with 
+  | Const x -> []
+  | Var var -> [var]
+  | Add (exp1, exp2) -> union (vars_of exp1) (vars_of exp2)
+  | Mult (exp1, exp2) -> union (vars_of exp1) (vars_of exp2)
+  | Neg exp -> vars_of exp
 
 (*
   How should we _interpret_ (i.e. give meaning to) an expression?
@@ -884,7 +914,12 @@ let ctxt2 : ctxt = [ ("x", 2L); ("y", 7L) ] (* maps "x" to 2L, "y" to 7L *)
   such value, it should raise the Not_found exception.
 *)
 let rec lookup (x : string) (c : ctxt) : int64 =
-  failwith "unimplemented"
+  match c with
+  | [] -> raise(Not_found)
+  | t::rest -> let (var, value) = t in
+      if var = x 
+        then value
+        else lookup x rest
 
 (*
    Problem 4-3
@@ -909,8 +944,13 @@ let rec lookup (x : string) (c : ctxt) : int64 =
    gradedtests.ml.
 *)
 
-let rec interpret (c : ctxt) (e : exp) : int64 =
-  failwith "unimplemented"
+let rec interpret (c : ctxt) (e : exp) : int64 = 
+  match e with
+  | Const n -> n
+  | Var var -> lookup var c
+  | Add (exp1, exp2) -> Int64.add (interpret c exp1) (interpret c exp2)
+  | Mult (exp1, exp2) -> Int64.mul (interpret c exp1) (interpret c exp2)
+  | Neg exp -> Int64.mul (-1L) (interpret c exp)
 
 (*
   Problem 4-4
@@ -955,7 +995,23 @@ let rec interpret (c : ctxt) (e : exp) : int64 =
 *)
 
 let rec optimize (e : exp) : exp =
-  failwith "optimize unimplemented"
+  let ctxt = [] in
+  match e with
+  | Const n -> e
+  | Var x -> e
+  | Add (exp1, exp2) -> 
+    match (interpret ctxt exp1, interpret ctxt exp2) with
+    | (0L, _) -> exp2
+    | (_, 0L) -> exp1
+    | _ -> e
+  | Mult (exp1, exp2) ->
+    match (exp1, exp2) with
+    | (Const 0, _) -> Const 0L
+    | (_, Const 0L) -> Const 0L
+    | (Const 1L, _) -> optimize(exp2)
+    | (_, Const 1L) -> optimize(exp1)
+  | Neg exp1 -> Mult((Const (-1L)), exp1)
+
 
 (******************************************************************************)
 (*                                                                            *)
