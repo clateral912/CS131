@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "lec3-4.md",
+                "file": "OCaml Intro.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "lec3-4"
+              "title": "OCaml Intro"
             }
           },
           {
@@ -185,9 +185,9 @@
   },
   "active": "1a66270a23f97788",
   "lastOpenFiles": [
+    "lec3-4.md",
     "slides/lec02.pdf",
     "slides/lec01.pdf",
-    "lec3-4.md",
     "OCaml Intro.md",
     "Pasted image 20250617212246.png",
     "Pasted image 20250617014433.png",

@@ -60,3 +60,5 @@
 12. 对于andq orq xorq这三条指令，执行后OF位总是会被设为0！
 13. 对于SF，ZF，OF ， shift指令有很复杂的进位规则！请查表！
 14. cmpq SRC1 SRC2用于比较两个操作数的操作是内置的subq SRC1, SRC2, 操作是SRC2 - SRC1, 这样OF SF ZF位都按照subq的操作来设置
+15. `Ind1` : `imm` 类型间接寻址方式，仅仅使用一个立即数，这个立即数被视作相对于当前指令RIP(CS:IP)的偏移量，比如leaq \_label1, %rax表示将\_lable1的地址装入rax中，在实际编译时_label会被替换为imm(%rip)，即相对rip的偏移量
+16. 

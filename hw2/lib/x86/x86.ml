@@ -5,9 +5,10 @@
 (* Labels for code blocks and global data. *)
 type lbl = string
 
+(* quad = 4 byte = 1 instruction*)
 type quad = int64
 
-(* Immediate operands *)
+(* Immediate operands, imm可以为Lit类型数字，也可以为String类型的label *)
 type imm = Lit of quad
          | Lbl of lbl
 
@@ -41,15 +42,18 @@ type opcode = Movq | Pushq | Popq
 (* An instruction is an opcode plus its operands.
    Note that arity and other constraints about the operands 
    are not checked. *)
+(* 注意！ 此处似乎默认了opcode都是单元运算符（只有一个operand）*)
 type ins = opcode * operand list              
 
 type data = Asciz of string
           | Quad of imm
 
+(* asm既可以是Text（代码），也可以是Data（数据）*)
 type asm = Text of ins list    (* code *)
          | Data of data list   (* data *)
 
 (* labeled blocks of data or code *)
+(* 程序被分为几个大块elem *)
 type elem = { lbl: lbl; global: bool; asm: asm }
 
 type prog = elem list

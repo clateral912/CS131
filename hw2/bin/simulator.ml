@@ -88,8 +88,12 @@ let rind : reg -> int = function
 
 (* Convert an int64 to its sbyte representation *)
 let sbytes_of_int64 (i:int64) : sbyte list =
+  (* Char和Int64是库*)
   let open Char in 
   let open Int64 in
+  (*将n逻辑右移i位，logand的意思是64位长整数按位与，0xff为掩码，意思是只取低8bit， 
+  to_int是将长整数转化为32位OCaml标准整数，
+  最后chr表示取int对应的char*)
   List.map (fun n -> Byte (shift_right i n |> logand 0xffL |> to_int |> chr))
            [0; 8; 16; 24; 32; 40; 48; 56]
 
@@ -97,18 +101,24 @@ let sbytes_of_int64 (i:int64) : sbyte list =
 let int64_of_sbytes (bs:sbyte list) : int64 =
   let open Char in
   let open Int64 in
-  let f b i = match b with
+  let f b i = 
+    match b with
     | Byte c -> logor (shift_left i 8) (c |> code |> of_int)
     | _ -> 0L
   in
   List.fold_right f bs 0L
 
 (* Convert a string to its sbyte representation *)
+(* when用于处理条件分支的特殊情况， 可以理解为带if的模式匹配 *)
 let sbytes_of_string (s:string) : sbyte list =
   let rec loop acc = function
     | i when i < 0 -> acc
-    | i -> loop (Byte s.[i]::acc) (pred i)
+    (* 将s的第i位放到acc列表前面，从后往前 *)
+    | i -> loop ((Byte s.[i])::acc) (pred i)  (* pred即为i的前序，succ为i的后继 *)
   in
+  (* @@操作符表示右结合的嵌套函数调用 ，而且优先级非常低，低于任何运算，因此
+  下面的表达式优先计算length - 1*)
+  (* \x为十六进制转义序列开头，后接两位数字（比如下面的00）表示一个十六进制的char字面量*)
   loop [Byte '\x00'] @@ String.length s - 1
 
 (* Serialize an instruction to sbytes *)
@@ -118,7 +128,11 @@ let sbytes_of_ins (op, args:ins) : sbyte list =
       invalid_arg "sbytes_of_ins: tried to serialize a label!"
     | _ -> ()
   in
+  (* 分号表示执行所有分号分隔的表达式，并只保留最后一个表达式的求值结果 *)
+  (* iter的意思是对列表中的每一个元素执行一次操作（函数f），并且不关心返回值
+    List.iter接受两个参数，第一个为操作函数f，第二个是要处理的列表list*)
   List.iter check args;
+  (* 最后的表达式默认为该函数的返回值，即一个sbyte列表 *)
   [InsB0 (op, args); InsFrag; InsFrag; InsFrag;
    InsFrag; InsFrag; InsFrag; InsFrag]
 
