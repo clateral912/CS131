@@ -350,8 +350,7 @@ let quadrupled_z_again : int = twice double z (* pass double to twice *)
    makes the first case of part1_tests "Problem 1" succeed. See the
    gradedtests.ml file.
 *)
-let pieces : int = 1
-
+let pieces : int = 8
 (* Implement a function cube that takes an int value and produces its cube. *)
 let cube : int -> int = fun (x: int) -> x * x * x
 
@@ -995,22 +994,36 @@ let rec interpret (c : ctxt) (e : exp) : int64 =
 *)
 
 let rec optimize (e : exp) : exp =
-  let ctxt = [] in
   match e with
   | Const n -> e
   | Var x -> e
-  | Add (exp1, exp2) -> 
-    match (interpret ctxt exp1, interpret ctxt exp2) with
-    | (0L, _) -> exp2
-    | (_, 0L) -> exp1
-    | _ -> e
-  | Mult (exp1, exp2) ->
+  | Add (exp1, exp2) ->
+    let exp1 = optimize exp1 in
+    let exp2 = optimize exp2 in(
     match (exp1, exp2) with
-    | (Const 0, _) -> Const 0L
-    | (_, Const 0L) -> Const 0L
-    | (Const 1L, _) -> optimize(exp2)
-    | (_, Const 1L) -> optimize(exp1)
-  | Neg exp1 -> Mult((Const (-1L)), exp1)
+    | (Const 0L, _) -> exp2
+    | (_, Const 0L) -> exp1
+    | (Const x, Const y) -> Const (Int64.add x y)
+    | _ -> Add(exp1, exp2))   (* 需要返回优化后的exp1和exp2, 而不是e（优化前的子表达式）*)
+  | Mult (exp1, exp2) ->
+    let exp1 = optimize exp1 in
+    let exp2 = optimize exp2 in(
+    match (exp1, exp2) with
+    | (Const 0L, _) -> Const 0L
+    | (_, Const 0L) -> Const 0L 
+    | (Const 1L, _) -> exp2 
+    | (_, Const 1L) -> exp1
+    | (Const (-1L), _) -> Neg exp2
+    | (_, Const (-1L)) -> Neg exp1
+    | (Const x, Const y) -> Const (Int64.mul x y)
+    | _ -> Mult(exp1, exp2))  (* 需要返回优化后的exp1和exp2, 而不是e（优化前的子表达式）*)
+  | Neg exp -> 
+    let exp = optimize exp in 
+    match exp with
+    | Const 0L -> Const 0L 
+    | Neg e -> e
+    | _ -> Neg (exp)
+
 
 
 (******************************************************************************)
@@ -1082,7 +1095,6 @@ let step (c : ctxt) (s : stack) (i : insn) : stack =
   | IAdd, v1 :: v2 :: s -> Int64.add v1 v2 :: s
   | INeg, v1 :: s -> Int64.neg v1 :: s
   | _ -> failwith "Stack had too few values"
-
 (*
    To define how a program executes, we simply iterate over the
    instructions, threading the stack through.
@@ -1149,7 +1161,13 @@ let ans1 = run [] p1
    - You should test the correctness of your compiler on several examples.
 *)
 let rec compile (e : exp) : program =
-  failwith "compile unimplemented"
+  match e with 
+  | Const n -> [IPushC n]
+  | Var var -> [IPushV var]
+  | Add (e1, e2) -> compile e1 @ compile e2 @ [IAdd]
+  | Mult (e1, e2) -> compile e1 @ compile e2 @ [IMul]
+  | Neg e -> compile e @ [INeg]
+
 
 (************)
 (* Epilogue *)
