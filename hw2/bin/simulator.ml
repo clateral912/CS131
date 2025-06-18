@@ -11,6 +11,8 @@ open X86
 
 let mem_bot = 0x400000L          (* lowest valid address *)
 let mem_top = 0x410000L          (* one past the last byte in memory *)
+let mem_bot_32 = 0x400000          (* lowest valid address *)
+let mem_top_32 = 0x410000          (* one past the last byte in memory *)
 let mem_size = Int64.to_int (Int64.sub mem_top mem_bot)
 let nregs = 17                   (* including Rip *)
 let ins_size = 8L                (* assume we have a 8-byte encoding *)
@@ -52,6 +54,7 @@ let exit_addr = 0xfdeadL         (* halt when m.regs(%rip) = exit_addr *)
        0x40000F :  InsFrag
        0x400010 :  InsFrag
 *)
+(* IMPORTANT 一个sbyte就是一个字节！*)
 type sbyte = InsB0 of ins       (* 1st byte of an instruction *)
            | InsFrag            (* 2nd - 8th bytes of an instruction *)
            | Byte of char       (* non-instruction byte *)
@@ -87,6 +90,7 @@ let rind : reg -> int = function
 (* Helper functions for reading/writing sbytes *)
 
 (* Convert an int64 to its sbyte representation *)
+(* 将一个int64类型变量拆成8个字节，按照小端序（低位在前）存在列表中*)
 let sbytes_of_int64 (i:int64) : sbyte list =
   (* Char和Int64是库*)
   let open Char in 
@@ -164,7 +168,21 @@ let ( >=. ) a b = (Int64.compare a b) >= 0
 
 (* Interpret a condition code with respect to the given flags. *)
 (* !!! Check the Specification for Help *)
-let interp_cnd {fo; fs; fz} : cnd -> bool = fun x -> failwith "interp_cnd unimplemented"
+let rec interp_cnd {fo; fs; fz} : cnd -> bool = fun x -> 
+  let flags = {fo; fs; fz} in
+  match x with
+  | Eq -> if fz then true else false
+  | Neq -> not (interp_cnd flags Eq)
+  (*注意！整数运算会有溢出问题，若不溢出且fs为0,就是小于的情况
+    若溢出了，符号位就反转了，有以下情况：
+    正数减去大负数，向上溢出成负数，此时fs = fo = 1
+    负数减去大正数，向下溢出成正数，此时fs = 0，f0 =0
+    不溢出，SRC2 - SRC1为整数，即Gt情况，fs = f0 = 0 
+    因此可以归纳出，(fs = fz) and (not fz)就是我们要的Gt情况*)
+  | Gt -> if fs = fo && (not fz) then false else true
+  | Ge -> interp_cnd flags Gt || interp_cnd flags Eq
+  | Lt -> not (interp_cnd flags Ge)
+  | Le -> not (interp_cnd flags Gt)
 
 
 (* Maps an X86lite address into Some OCaml array index,
@@ -193,12 +211,47 @@ let map_addr_segfault (addr:quad) : int =
   are glued together.
 *)
 
+(* 为什么必须使用quad类型作为addr的类型？因为这个模拟器试图完全模拟64位系统的行为！
+  64位的系统上地址也是64位的，必须提供统一的接口，*)
 let readquad (m:mach) (addr:quad) : quad =
-  failwith "readquad not implemented"
+  let fetch_byte (addr: int) : sbyte = m.mem.(addr) in
+
+  (* 注意！ 这个函数生成的是反转过后的list！*)
+  let rec fetch_nbyte_from_back (n: int) (base_addr: int) : sbyte list = 
+    if base_addr >= mem_size || base_addr <= 0
+    then 
+      failwith (Printf.sprintf "Memory access out of bounds")
+    else
+      match n with
+      | 0 -> []
+      | _ -> fetch_byte(base_addr + n - 1) :: fetch_nbyte_from_back(n - 1) (base_addr)
+  in
+
+  let base_addr_int = Int64.to_int (addr -. mem_bot) in
+  let byte_list = List.rev (fetch_nbyte_from_back 8 base_addr_int) in
+  
+  int64_of_sbytes byte_list
 
 
 let writequad (m:mach) (addr:quad) (w:quad) : unit =
-  failwith "writequad not implemented"
+  let byte_list = sbytes_of_int64 w in 
+  let rec write_8byte_from_front (list: sbyte list)(base_addr: int)(offset: int) : unit =
+    if base_addr >= mem_size || base_addr <= 0
+    then 
+      failwith (Printf.sprintf "Memory access out of bounds")
+    else
+      match offset with
+      | 8 -> ()
+      | _ -> 
+        match list with
+        | [] -> failwith("Provided list is shorter than 8!")
+        | h :: tl -> 
+          m.mem.(base_addr + offset) <- h; 
+          write_8byte_from_front tl base_addr (succ(offset))
+  in
+  let base_addr_int = Int64.to_int (addr -. mem_bot) in
+  write_8byte_from_front byte_list base_addr_int 0
+
 
 let fetchins (m:mach) (addr:quad) : ins =
   failwith "fetchins not implemented"
