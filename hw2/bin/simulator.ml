@@ -168,6 +168,7 @@ let ( >=. ) a b = (Int64.compare a b) >= 0
 
 (* Interpret a condition code with respect to the given flags. *)
 (* !!! Check the Specification for Help *)
+(* 注意！ 判断的是SRC2 ? SRC1，因此若subq的结果为正，那么应该返回Gt*)
 let rec interp_cnd {fo; fs; fz} : cnd -> bool = fun x -> 
   let flags = {fo; fs; fz} in
   match x with
@@ -179,7 +180,7 @@ let rec interp_cnd {fo; fs; fz} : cnd -> bool = fun x ->
     负数减去大正数，向下溢出成正数，此时fs = 0，f0 =0
     不溢出，SRC2 - SRC1为整数，即Gt情况，fs = f0 = 0 
     因此可以归纳出，(fs = fz) and (not fz)就是我们要的Gt情况*)
-  | Gt -> if fs = fo && (not fz) then false else true
+  | Gt -> if (fs = fo) && (not fz) then true else false
   | Ge -> interp_cnd flags Gt || interp_cnd flags Eq
   | Lt -> not (interp_cnd flags Ge)
   | Le -> not (interp_cnd flags Gt)
@@ -188,7 +189,9 @@ let rec interp_cnd {fo; fs; fz} : cnd -> bool = fun x ->
 (* Maps an X86lite address into Some OCaml array index,
    or None if the address is not within the legal address space. *)
 let map_addr (addr:quad) : int option =
-  failwith "map_addr not implemented"
+  match addr with
+  | n when n <= mem_top && n >= mem_bot -> Some (Int64.to_int(n -. mem_bot))
+  | _ -> None
 
 (* Your simulator should raise this exception if it tries to read from or
    store to an address not within the valid address space. *)
@@ -196,7 +199,10 @@ exception X86lite_segfault
 
 (* Raise X86lite_segfault when addr is invalid. *)
 let map_addr_segfault (addr:quad) : int =
-  failwith "map_addr_segfault not implemented"
+  let checked_addr = (map_addr addr) in
+  match checked_addr with
+  | None -> raise X86lite_segfault
+  | Some i -> i
 
 (* Simulates one step of the machine:
     - fetch the instruction at %rip
