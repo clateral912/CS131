@@ -53,4 +53,10 @@
 	12. g返回：执行ret，即popq %rip，将此时rsp指向的位置中的值Iret弹出到rip中，程序跳转到Iret label处继续执行
 	13. 至此，f完成了函数调用的整个过程，栈帧恢复如初，并拿到了返回值（注意！此时stack中的arg7和arg8还尚未被清理！）
 	![[Pasted image 20250617014433.png]]
-	
+10. 在一条x86指令中，不能使用两次间接寻址Ind
+11. reg和(reg)的区别
+	- `mov %rax, %rbx` 操作数是rax和rbx内的值
+	- `mov %rax, (%rbx)`操作数是rax和rbx内的地址指向的内存（类似于解引用rbx）
+12. 对于andq orq xorq这三条指令，执行后OF位总是会被设为0！
+13. 对于SF，ZF，OF ， shift指令有很复杂的进位规则！请查表！
+14. cmpq SRC1 SRC2用于比较两个操作数的操作是内置的subq SRC1, SRC2, 操作是SRC2 - SRC1, 这样OF SF ZF位都按照subq的操作来设置

@@ -11,12 +11,14 @@
             "id": "1a66270a23f97788",
             "type": "leaf",
             "state": {
-              "type": "pdf",
+              "type": "markdown",
               "state": {
-                "file": "slides/lec02.pdf"
+                "file": "lec3-4.md",
+                "mode": "source",
+                "source": false
               },
-              "icon": "lucide-file-text",
-              "title": "lec02"
+              "icon": "lucide-file",
+              "title": "lec3-4"
             }
           },
           {
@@ -183,6 +185,7 @@
   },
   "active": "1a66270a23f97788",
   "lastOpenFiles": [
+    "slides/lec02.pdf",
     "slides/lec01.pdf",
     "lec3-4.md",
     "OCaml Intro.md",
@@ -195,7 +198,6 @@
     "Pasted image 20250617004045.png",
     "Pasted image 20250617001706.png",
     "欢迎.md",
-    "slides/lec02.pdf",
     "lec2.md",
     "lec1.md",
     "slides"
