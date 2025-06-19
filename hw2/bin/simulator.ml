@@ -267,6 +267,24 @@ let fetchins (m:mach) (addr:quad) : ins =
   | InsB0(ins) :: _ -> ins
   | (Byte _ | InsFrag) :: _ -> failwith "Do not contain an instruction"
 
+(* 解析到值 *)
+let resolve_value (m: mach) (operand: operand) : int64 = 
+  match operand with
+  | Imm (Lit x) -> x
+  | Reg name -> m.regs.(rind name)
+  | Ind1 (Lit offset) -> readquad m @@ (m.regs.(rind Rip) +. offset) (* TODO: 严重错误！没有考虑string*)
+  | Ind2 name -> readquad m @@ m.regs.(rind name)
+  | Ind3 (Lit offset, name) -> readquad m @@ (m.regs.(rind name) +. offset)
+  | _ -> failwith "resolve_value: Resolve SRC error!"
+
+(* 解析到地址 *)
+let resolve_addr (m: mach) (operand: operand) : int64 = 
+  match operand with
+  | Ind1 (Lit offset) -> (m.regs.(rind Rip) +. offset) (* TODO: 严重错误！没有考虑string*)
+  | Ind2 name -> m.regs.(rind name)
+  | Ind3 (Lit offset, name) -> (m.regs.(rind name) +. offset)
+  | _ -> failwith "resolve_addr: Resolve ADDR error!"
+
 
 (* Compute the instruction result.
  * NOTE: See int64_overflow.ml for the definition of the return type
@@ -298,25 +316,53 @@ let interp_opcode (m: mach) (o:opcode) (args:int64 list) : Int64_overflow.t =
 
 (** Update machine state with instruction results. *)
 let ins_writeback (m: mach) : ins -> int64 -> unit  = 
-  failwith "ins_writeback not implemented"
+  let get_dest (operand_list: operand list) : operand = 
+    match operand_list with
+    | [dest] -> dest
+    | [src; dest] -> dest
+    | _ -> failwith "get_dest: cannot find dest to write!"
+  in 
+  let write_dest (res: int64) (operand: operand)  : unit =(
+    match operand with
+    | Reg name -> (m.regs.(rind name) <- res)
+    | ((Ind1 _) | (Ind2 _)| (Ind3 _)) -> writequad m (resolve_addr m operand) res
+    | _ -> failwith "write_dest: fail to write dest!")
+  in
+  let 
+    update (operand_list: operand list) (res: int64) = write_dest res (get_dest operand_list) 
+  in
+  let  
+    check_cnd (cnd: cnd) : bool = interp_cnd (m.flags) (cnd)
+  in
+  fun (instr: ins) (res: int64) : unit ->
+    let (opcode, operand_list) = instr in
+    let dest_addr = get_dest operand_list in
+    match opcode with
+    | Cmpq -> () (* cmpq不涉及任何写入 *)
+    | J cnd -> 
+      if check_cnd(cnd) 
+      then
+         write_dest res (Reg Rip)
+      else ()
+    | Set cnd ->(
+      match operand_list with
+      | [dest] -> 
+        let original_val =
+          match dest with
+          | Reg r -> m.regs.(rind r)
+          | _ -> readquad m (resolve_addr m dest)
+        in
+        let cleared_val = Int64.logand original_val (Int64.lognot 0xffL) in
+        if check_cnd(cnd) 
+        then
+          write_dest (cleared_val +. 1L) dest
+        else 
+          write_dest (cleared_val) dest
+      | _ -> failwith "ins_writeback: Set instruction needs one operand" )
+    | _ -> update operand_list res
+      
 
-(* 解析到值 *)
-let resolve_value (m: mach) (operand: operand) : int64 = 
-  match operand with
-  | Imm (Lit x) -> x
-  | Reg name -> m.regs.(rind name)
-  | Ind1 (Lit offset) -> readquad m @@ (m.regs.(rind Rip) +. offset) (* TODO: 严重错误！没有考虑string*)
-  | Ind2 name -> readquad m @@ m.regs.(rind name)
-  | Ind3 (Lit offset, name) -> readquad m @@ (m.regs.(rind name) +. offset)
-  | _ -> failwith "resolve_value: Resolve SRC error!"
 
-(* 解析到地址 *)
-let resolve_addr (m: mach) (operand: operand) : int64 = 
-  match operand with
-  | Ind1 (Lit offset) -> (m.regs.(rind Rip) +. offset) (* TODO: 严重错误！没有考虑string*)
-  | Ind2 name -> m.regs.(rind name)
-  | Ind3 (Lit offset, name) -> (m.regs.(rind name) +. offset)
-  | _ -> failwith "resolve_addr: Resolve ADDR error!"
 
 (* mem addr ---> mem array index *)
 (* 事实：只有src需要解析到值，dest则只需要解析到地址*)
@@ -398,6 +444,8 @@ let rec crack : ins -> ins list = function
     [(Movq, [Ind2 Rsp; dest]); (Addq, [Imm(Lit 8L); Reg Rsp])] 
   | (Callq, [src]) ->
     crack ((Pushq, [Reg Rip])) @ [(Movq, [src; Reg Rip])]
+  | (Jmp, [src]) -> 
+    [(Movq, [src; Reg Rip])]
   | ((Callq, _) | (Pushq, _) | (Popq, _)) -> failwith "crack: Illegal crack ins operand type!"
   | _ as instr -> [instr]
  
