@@ -289,6 +289,11 @@ let interp_opcode (m: mach) (o:opcode) (args:int64 list) : Int64_overflow.t =
       | Shlq, [amt; dest] -> ok(Int64.shift_left (dest) (Int64.to_int amt))
       | Shrq, [amt; dest] -> ok(Int64.shift_right_logical (dest) (Int64.to_int amt))
       | Cmpq, [src1; src2] -> sub (src2) (src1)
+      | Leaq, [ind; dest] -> ok(ind)
+      | Movq, [src; dest] -> ok(src)
+      | Set _, [dest] -> ok(dest) (* TODO：set需要手动计算！*)
+      | Jmp, [src] -> ok(src)
+      | J _, [src] -> ok(src)
       | _ -> failwith "interp_opcode: Unknown opcode or illegal parameter"
 
 (** Update machine state with instruction results. *)
@@ -305,6 +310,14 @@ let resolve_value (m: mach) (operand: operand) : int64 =
   | Ind3 (Lit offset, name) -> readquad m @@ (m.regs.(rind name) +. offset)
   | _ -> failwith "resolve_value: Resolve SRC error!"
 
+(* 解析到地址 *)
+let resolve_addr (m: mach) (operand: operand) : int64 = 
+  match operand with
+  | Ind1 (Lit offset) -> (m.regs.(rind Rip) +. offset) (* TODO: 严重错误！没有考虑string*)
+  | Ind2 name -> m.regs.(rind name)
+  | Ind3 (Lit offset, name) -> (m.regs.(rind name) +. offset)
+  | _ -> failwith "resolve_addr: Resolve ADDR error!"
+
 (* mem addr ---> mem array index *)
 (* 事实：只有src需要解析到值，dest则只需要解析到地址*)
 let interp_operands (m:mach) (instr: ins) : int64 list = 
@@ -317,7 +330,7 @@ let interp_operands (m:mach) (instr: ins) : int64 list =
     | _ -> failwith "interp_operands: Interpret cmpq error!")
   | (Leaq, _) ->(
     match operand_list with
-    | [ind; dest] -> [resolve_value m ind; resolve_value m dest]
+    | [ind; dest] -> [resolve_addr m ind; resolve_addr m dest]
     | _ -> failwith "interp_operands: Interpret leaq error!")
   | ((Pushq, _) | (Jmp, _) | (J _, _) | (Callq, _)) -> (
     match operand_list with
@@ -332,10 +345,6 @@ let interp_operands (m:mach) (instr: ins) : int64 list =
     match operand_list with
     | [src; dest] -> [resolve_value m src; resolve_value m dest]
     | _ -> failwith "interp_operands: Interpret single SRC error!")
-  
-
-    
-
   
   
 type operandType = DEST | SRC | AMT | IND | REG
@@ -381,6 +390,8 @@ let validate_operands (instruction: ins) : unit =
 
 let rec crack : ins -> ins list = function
   (* 惊为天人的写法：同时匹配两个参数！*)
+  | (Retq, []) ->
+    crack ((Popq, [Reg Rip]))
   | (Pushq, [src]) -> 
     [(Subq, [Imm(Lit 8L); Reg Rsp]); (Movq, [src ;Ind2 Rsp])]
   | (Popq, [dest]) ->
