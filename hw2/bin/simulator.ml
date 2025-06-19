@@ -17,6 +17,7 @@ let mem_size = Int64.to_int (Int64.sub mem_top mem_bot)
 let nregs = 17                   (* including Rip *)
 let ins_size = 8L                (* assume we have a 8-byte encoding *)
 let exit_addr = 0xfdeadL         (* halt when m.regs(%rip) = exit_addr *)
+let dummy = Int64.max_int
 
 (* The simulator memory maps addresses to symbolic bytes.  Symbolic
    bytes are either actual data indicated by the Byte constructor or
@@ -280,22 +281,58 @@ let interp_opcode (m: mach) (o:opcode) (args:int64 list) : Int64_overflow.t =
 let ins_writeback (m: mach) : ins -> int64 -> unit  = 
   failwith "ins_writeback not implemented"
 
+(* 解析到值 *)
+let resolve_src (m: mach) (operand: operand) : int64 = 
+  match operand with
+  | Imm (Lit x) -> x
+  | Reg name -> m.regs.(rind name)
+  | Ind1 (Lit offset) -> readquad m @@ (m.regs.(rind Rip) +. offset) (* TODO: 严重错误！没有考虑string*)
+  | Ind2 name -> readquad m @@ m.regs.(rind name)
+  | Ind3 (Lit offset, name) -> readquad m @@ (m.regs.(rind name) +. offset)
+  | _ -> failwith "Resolve SRC error!"
+
+(* 解析到地址 *)
+let resolve_dest (m: mach) (operand: operand) : int64 = 
+  match operand with
+  | Imm _ -> dummy  (* 对Imm和Reg解析到地址没有意义 *)
+  | Reg _ -> dummy
+  | Ind1 (Lit offset) -> m.regs.(rind Rip) +. offset  (* TODO: 严重错误！没有考虑string*)
+  | Ind2 name -> m.regs.(rind name)
+  | Ind3 (Lit offset, name) -> m.regs.(rind name) +. offset
+  | _ -> failwith "Resolve DEST error!"
 
 (* mem addr ---> mem array index *)
-let interp_operands (m:mach) : ins -> int64 list = 
-  failwith "interp_operands not implemented"
-  (*
-  fun (instruction: ins) : int64 list ->
-    let (opcode, operand_list) = instruction in
-    let f (operand: operand) : int64 =
-      match operand with 
-      | Imm (Lit q) -> q
-      | Reg name -> m.regs.(rind name)
-      | Ind1 (Lit offset) -> m.regs.(rind Rip) +. offset (* TODO: 有重大缺陷，无法解析string类型Lbl*)
-      | Ind2 name -> int64_of_sbytes @@ fetch_8byte m (m.regs.(rind name))
-      | Ind3 (Lit offset, name) -> 
-    in
-      List.map f operand_list*)
+(* 事实：只有src需要解析到值，dest则只需要解析到地址*)
+let interp_operands (m:mach) (instr: ins) : int64 list = 
+  let (opcode, operand_list) = instr in 
+  match (opcode, operand_list) with
+  | (Retq, _) -> []
+  | (Cmpq, _) -> (
+    match operand_list with
+    | [src1; src2] -> [resolve_src m src1; resolve_src m src2]
+    | _ -> failwith "Interpret cmpq error!")
+  | (Leaq, _) ->(
+    match operand_list with
+    | [ind; dest] -> [resolve_dest m ind; resolve_dest m dest]
+    | _ -> failwith "Interpret leaq error!")
+  | ((Pushq, _) | (Jmp, _) | (J _, _) | (Callq, _)) -> (
+    match operand_list with
+    | [src] -> [resolve_src m src]
+    | _ -> failwith "Interpret single SRC error!")
+  | ((Negq, _) | (Incq, _) | (Decq, _) | (Notq, _) | (Popq, _) | (Set _, _)) ->(
+    match operand_list with
+    | [dest] -> [resolve_dest m dest]
+    | _ -> failwith "Interpret single DEST error!")
+  | ((Addq, _) | (Subq, _) | (Imulq, _) | (Andq, _) | (Orq, _) | (Xorq, _) | 
+     (Sarq, _) | (Shlq, _) | (Shrq, _) | (Movq, _)) -> (
+    match operand_list with
+    | [src; dest] -> [resolve_src m src; resolve_dest m dest]
+    | _ -> failwith "Interpret single SRC error!")
+  
+
+    
+
+  
   
 type operandType = DEST | SRC | AMT | IND | REG
 
