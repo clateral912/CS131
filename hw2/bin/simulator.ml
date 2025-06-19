@@ -258,8 +258,7 @@ let writequad (m:mach) (addr:quad) (w:quad) : unit =
   write_8byte_from_front byte_list base_addr_int 0
 
 
-let fetchins (m:mach) (addr:quad) : ins =
-  
+let fetchins (m:mach) (addr:quad) : ins = 
   let instruction = fetch_8byte m addr in
   match instruction with
   | [] -> failwith "empty instruction!"
@@ -298,15 +297,57 @@ let interp_operands (m:mach) : ins -> int64 list =
     in
       List.map f operand_list*)
   
-  
+type operandType = DEST | SRC | AMT | IND | REG
 
-let validate_operands : ins -> unit = function
-  | _ -> failwith "validate_operands not implemented"
+let operand_type_check (operand: operand) (desiredType: operandType) : unit =
+  match operand with 
+  | Imm _ -> (
+    match desiredType with
+    | (SRC | AMT) -> ()
+    | _ -> failwith "Incorrect operand type!, ")
+  | Reg _ ->(
+    match desiredType with
+    | (SRC | DEST | REG) -> ()
+    | _ -> failwith "Incorrect operand type!")
+  | (Ind1 _ | Ind2 _ | Ind3 _) ->(
+    match desiredType with
+    | (SRC | DEST | IND) -> ()
+    | _ -> failwith "Incorrect operand type!")
+
+let rec operand_list_type_check (actual: operand list) (expect: operandType list) : unit =
+  (* 惊为天人的写法！将两个列表同时进行模式匹配！*)
+  match (actual, expect) with
+  | ([], []) -> ()
+  | ((_, []) | ([], _)) -> failwith "Illegal operand num!"
+  | (actual_operand :: atl, expect_type :: etl) -> (
+    operand_type_check actual_operand expect_type;
+    operand_list_type_check (atl) (etl))
+
+let validate_operands (instruction: ins) : unit = 
+  let (opcode, operand_list) = instruction in
+  let check = operand_list_type_check operand_list in
+  match opcode with
+  | Retq -> check []
+  | (Negq | Incq | Decq | Notq | Popq | Set _) -> check [DEST]
+  | (Pushq | Jmp | Callq | J _) -> check [SRC]
+  | (Sarq | Shlq | Shrq ) -> check [AMT; DEST]
+  | (Addq | Subq | Andq | Orq | Xorq | Movq) -> check [SRC; DEST]
+  | Leaq -> check [IND; DEST]
+  | Cmpq -> check [SRC; SRC]
+  | Imulq -> check [SRC; REG]
 
 
-let crack : ins -> ins list = function
-  | _ -> failwith "crack not implemented"
 
+let rec crack : ins -> ins list = function
+  (* 惊为天人的写法：同时匹配两个参数！*)
+  | (Pushq, [src]) -> 
+    [(Subq, [Imm(Lit 8L); Reg Rsp]); (Movq, [src ;Ind2 Rsp])]
+  | (Popq, [dest]) ->
+    [(Movq, [Ind2 Rsp; dest]); (Addq, [Imm(Lit 8L); Reg Rsp])] 
+  | (Callq, [src]) ->
+    crack ((Pushq, [Reg Rip])) @ [(Movq, [src; Reg Rip])]
+  | ((Callq, _) | (Pushq, _) | (Popq, _)) -> failwith "Illegal crack ins operand type!"
+  | _ as instr -> [instr]
  
 (* TODO: double check against spec *)
 let set_flags (m:mach) (op:opcode) (ws: quad list) (w : Int64_overflow.t) : unit =
