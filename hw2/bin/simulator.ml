@@ -170,20 +170,19 @@ let ( >=. ) a b = (Int64.compare a b) >= 0
 (* !!! Check the Specification for Help *)
 (* 注意！ 判断的是SRC2 ? SRC1，因此若subq的结果为正，那么应该返回Gt*)
 let rec interp_cnd {fo; fs; fz} : cnd -> bool = fun x -> 
-  let flags = {fo; fs; fz} in
   match x with
-  | Eq -> if fz then true else false
-  | Neq -> not (interp_cnd flags Eq)
+  | Eq -> fz
+  | Neq -> not fz
   (*注意！整数运算会有溢出问题，若不溢出且fs为0,就是小于的情况
     若溢出了，符号位就反转了，有以下情况：
     正数减去大负数，向上溢出成负数，此时fs = fo = 1
     负数减去大正数，向下溢出成正数，此时fs = 0，f0 =0
     不溢出，SRC2 - SRC1为整数，即Gt情况，fs = f0 = 0 
     因此可以归纳出，(fs = fz) and (not fz)就是我们要的Gt情况*)
-  | Gt -> if (fs = fo) && (not fz) then true else false
-  | Ge -> interp_cnd flags Gt || interp_cnd flags Eq
-  | Lt -> not (interp_cnd flags Ge)
-  | Le -> not (interp_cnd flags Gt)
+  | Gt -> (fs = fo) && (not fz)
+  | Ge -> fs = fo
+  | Lt -> fs <> fo
+  | Le -> not ((fs = fo) && (not fz))
 
 
 (* Maps an X86lite address into Some OCaml array index,
@@ -217,25 +216,26 @@ let map_addr_segfault (addr:quad) : int =
   are glued together.
 *)
 
-(* 为什么必须使用quad类型作为addr的类型？因为这个模拟器试图完全模拟64位系统的行为！
-  64位的系统上地址也是64位的，必须提供统一的接口，*)
-let readquad (m:mach) (addr:quad) : quad =
+(* 注意！ 这个函数生成的是反转过后的list！*)
+let fetch_nbyte_from_back (m: mach) (n: int) (base_addr: int) : sbyte list = 
   let fetch_byte (addr: int) : sbyte = m.mem.(addr) in
-
-  (* 注意！ 这个函数生成的是反转过后的list！*)
-  let rec fetch_nbyte_from_back (n: int) (base_addr: int) : sbyte list = 
+  let rec fetch_nbyte_from_back_core (m: mach) (n: int) (base_addr: int) : sbyte list = 
     if base_addr >= mem_size || base_addr <= 0
     then 
       failwith (Printf.sprintf "Memory access out of bounds")
     else
       match n with
       | 0 -> []
-      | _ -> fetch_byte(base_addr + n - 1) :: fetch_nbyte_from_back(n - 1) (base_addr)
+      | _ -> fetch_byte(base_addr + n - 1) :: fetch_nbyte_from_back_core m (n - 1) (base_addr)
   in
+    List.rev @@ fetch_nbyte_from_back_core m n base_addr
 
+
+(* 为什么必须使用quad类型作为addr的类型？因为这个模拟器试图完全模拟64位系统的行为！
+  64位的系统上地址也是64位的，必须提供统一的接口，*)
+let readquad (m:mach) (addr:quad) : quad =
   let base_addr_int = Int64.to_int (addr -. mem_bot) in
-  let byte_list = List.rev (fetch_nbyte_from_back 8 base_addr_int) in
-  
+  let byte_list = fetch_nbyte_from_back m 8 base_addr_int in
   int64_of_sbytes byte_list
 
 
@@ -279,6 +279,20 @@ let ins_writeback (m: mach) : ins -> int64 -> unit  =
 (* mem addr ---> mem array index *)
 let interp_operands (m:mach) : ins -> int64 list = 
   failwith "interp_operands not implemented"
+  (* 
+  fun (instruction: ins) : int64 list ->
+    let (opcode, operand_list) = instruction in
+    let f (operand: operand) : int64 =
+      match operand with 
+      | Imm (Lit q) -> q
+      | Reg name -> m.regs.(rind name)
+      | Ind1 (Lit offset) -> m.regs.(rind (Reg Rip)) +. offset (* TODO: 有重大缺陷，无法解析string类型Lbl*)
+      | Ind2 name -> int64_of_sbytes(m.mem.(Int64.to_int (m.regs.(rind name))))
+    in
+      List.map f operand_list
+  
+  *)
+  
 
 let validate_operands : ins -> unit = function
   | _ -> failwith "validate_operands not implemented"

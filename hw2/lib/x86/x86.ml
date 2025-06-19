@@ -42,7 +42,7 @@ type opcode = Movq | Pushq | Popq
 (* An instruction is an opcode plus its operands.
    Note that arity and other constraints about the operands 
    are not checked. *)
-(* 注意！ 此处似乎默认了opcode都是单元运算符（只有一个operand）*)
+(* (opcode, [operand1, operand2 ...]) list的结合性高于 * 号！*)
 type ins = opcode * operand list              
 
 type data = Asciz of string
