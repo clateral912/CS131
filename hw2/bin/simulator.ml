@@ -216,11 +216,11 @@ let map_addr_segfault (addr:quad) : int =
   are glued together.
 *)
 
-(* 注意！ 这个函数生成的是反转过后的list！*)
-let fetch_nbyte_from_back (m: mach) (n: int) (base_addr: int) : sbyte list = 
+let fetch_8byte (m: mach) (base_addr: quad) : sbyte list =
+  let base_addr = Int64.to_int (base_addr -. mem_bot)in 
   let fetch_byte (addr: int) : sbyte = m.mem.(addr) in
   let rec fetch_nbyte_from_back_core (m: mach) (n: int) (base_addr: int) : sbyte list = 
-    if base_addr >= mem_size || base_addr <= 0
+    if base_addr > mem_size || base_addr < 0
     then 
       failwith (Printf.sprintf "Memory access out of bounds")
     else
@@ -228,14 +228,13 @@ let fetch_nbyte_from_back (m: mach) (n: int) (base_addr: int) : sbyte list =
       | 0 -> []
       | _ -> fetch_byte(base_addr + n - 1) :: fetch_nbyte_from_back_core m (n - 1) (base_addr)
   in
-    List.rev @@ fetch_nbyte_from_back_core m n base_addr
+    List.rev @@ fetch_nbyte_from_back_core m 8 base_addr
 
 
 (* 为什么必须使用quad类型作为addr的类型？因为这个模拟器试图完全模拟64位系统的行为！
   64位的系统上地址也是64位的，必须提供统一的接口，*)
 let readquad (m:mach) (addr:quad) : quad =
-  let base_addr_int = Int64.to_int (addr -. mem_bot) in
-  let byte_list = fetch_nbyte_from_back m 8 base_addr_int in
+  let byte_list = fetch_8byte m addr in
   int64_of_sbytes byte_list
 
 
@@ -260,7 +259,14 @@ let writequad (m:mach) (addr:quad) (w:quad) : unit =
 
 
 let fetchins (m:mach) (addr:quad) : ins =
-  failwith "fetchins not implemented"
+  
+  let instruction = fetch_8byte m addr in
+  match instruction with
+  | [] -> failwith "empty instruction!"
+  (* 以下这个模式匹配需要注意！*)
+  | InsB0(ins) :: _ -> ins
+  | (Byte _ | InsFrag) :: _ -> failwith "Do not contain an instruction"
+
 
 (* Compute the instruction result.
  * NOTE: See int64_overflow.ml for the definition of the return type
@@ -279,19 +285,19 @@ let ins_writeback (m: mach) : ins -> int64 -> unit  =
 (* mem addr ---> mem array index *)
 let interp_operands (m:mach) : ins -> int64 list = 
   failwith "interp_operands not implemented"
-  (* 
+  (*
   fun (instruction: ins) : int64 list ->
     let (opcode, operand_list) = instruction in
     let f (operand: operand) : int64 =
       match operand with 
       | Imm (Lit q) -> q
       | Reg name -> m.regs.(rind name)
-      | Ind1 (Lit offset) -> m.regs.(rind (Reg Rip)) +. offset (* TODO: 有重大缺陷，无法解析string类型Lbl*)
-      | Ind2 name -> int64_of_sbytes(m.mem.(Int64.to_int (m.regs.(rind name))))
+      | Ind1 (Lit offset) -> m.regs.(rind Rip) +. offset (* TODO: 有重大缺陷，无法解析string类型Lbl*)
+      | Ind2 name -> int64_of_sbytes @@ fetch_8byte m (m.regs.(rind name))
+      | Ind3 (Lit offset, name) -> 
     in
-      List.map f operand_list
+      List.map f operand_list*)
   
-  *)
   
 
 let validate_operands : ins -> unit = function

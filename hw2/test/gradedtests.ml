@@ -226,6 +226,8 @@ let fetch_ins_tests =
   ] in 
   let m = test_machine test_code in
   let rip : quad = m.regs.(rind Rip) in 
+  print_int (Int64.to_int rip);
+  print_char '\n';
   let instr : ins = (Movq, [~$42; ~%Rax]) in 
   [
     ("fetch instruction", 
