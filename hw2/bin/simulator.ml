@@ -275,31 +275,35 @@ let interp_opcode (m: mach) (o:opcode) (args:int64 list) : Int64_overflow.t =
     let open Int64 in
     let open Int64_overflow in
     match o, args with
-      | _ -> failwith "interp_opcode not implemented"
+      | Negq, [dest; _] -> neg (dest)
+      | Addq, [src; dest] -> add (src) (dest)
+      | Subq, [src; dest] -> sub (dest) (src)
+      | Imulq, [src; reg] -> mul (src) (reg)
+      | Incq, [dest] -> succ (dest)
+      | Decq, [dest] -> pred (dest)
+      | Notq, [dest] -> ok(Int64.lognot (dest))
+      | Andq, [src; dest] -> ok(Int64.logand (src) (dest))
+      | Orq, [src; dest] -> ok(Int64.logor (src) (dest))
+      | Xorq, [src; dest] -> ok(Int64.logxor (src) (dest))
+      | Sarq, [amt; dest] -> ok(Int64.shift_right (dest) (Int64.to_int amt))
+      | Shlq, [amt; dest] -> ok(Int64.shift_left (dest) (Int64.to_int amt))
+      | Shrq, [amt; dest] -> ok(Int64.shift_right_logical (dest) (Int64.to_int amt))
+      | Cmpq, [src1; src2] -> sub (src2) (src1)
+      | _ -> failwith "interp_opcode: Unknown opcode or illegal parameter"
 
 (** Update machine state with instruction results. *)
 let ins_writeback (m: mach) : ins -> int64 -> unit  = 
   failwith "ins_writeback not implemented"
 
 (* 解析到值 *)
-let resolve_src (m: mach) (operand: operand) : int64 = 
+let resolve_value (m: mach) (operand: operand) : int64 = 
   match operand with
   | Imm (Lit x) -> x
   | Reg name -> m.regs.(rind name)
   | Ind1 (Lit offset) -> readquad m @@ (m.regs.(rind Rip) +. offset) (* TODO: 严重错误！没有考虑string*)
   | Ind2 name -> readquad m @@ m.regs.(rind name)
   | Ind3 (Lit offset, name) -> readquad m @@ (m.regs.(rind name) +. offset)
-  | _ -> failwith "Resolve SRC error!"
-
-(* 解析到地址 *)
-let resolve_dest (m: mach) (operand: operand) : int64 = 
-  match operand with
-  | Imm _ -> dummy  (* 对Imm和Reg解析到地址没有意义 *)
-  | Reg _ -> dummy
-  | Ind1 (Lit offset) -> m.regs.(rind Rip) +. offset  (* TODO: 严重错误！没有考虑string*)
-  | Ind2 name -> m.regs.(rind name)
-  | Ind3 (Lit offset, name) -> m.regs.(rind name) +. offset
-  | _ -> failwith "Resolve DEST error!"
+  | _ -> failwith "resolve_value: Resolve SRC error!"
 
 (* mem addr ---> mem array index *)
 (* 事实：只有src需要解析到值，dest则只需要解析到地址*)
@@ -309,25 +313,25 @@ let interp_operands (m:mach) (instr: ins) : int64 list =
   | (Retq, _) -> []
   | (Cmpq, _) -> (
     match operand_list with
-    | [src1; src2] -> [resolve_src m src1; resolve_src m src2]
-    | _ -> failwith "Interpret cmpq error!")
+    | [src1; src2] -> [resolve_value m src1; resolve_value m src2]
+    | _ -> failwith "interp_operands: Interpret cmpq error!")
   | (Leaq, _) ->(
     match operand_list with
-    | [ind; dest] -> [resolve_dest m ind; resolve_dest m dest]
-    | _ -> failwith "Interpret leaq error!")
+    | [ind; dest] -> [resolve_value m ind; resolve_value m dest]
+    | _ -> failwith "interp_operands: Interpret leaq error!")
   | ((Pushq, _) | (Jmp, _) | (J _, _) | (Callq, _)) -> (
     match operand_list with
-    | [src] -> [resolve_src m src]
-    | _ -> failwith "Interpret single SRC error!")
+    | [src] -> [resolve_value m src]
+    | _ -> failwith "interp_operands: Interpret single SRC error!")
   | ((Negq, _) | (Incq, _) | (Decq, _) | (Notq, _) | (Popq, _) | (Set _, _)) ->(
     match operand_list with
-    | [dest] -> [resolve_dest m dest]
-    | _ -> failwith "Interpret single DEST error!")
+    | [dest] -> [resolve_value m dest]
+    | _ -> failwith "interp_operands: Interpret single DEST error!")
   | ((Addq, _) | (Subq, _) | (Imulq, _) | (Andq, _) | (Orq, _) | (Xorq, _) | 
      (Sarq, _) | (Shlq, _) | (Shrq, _) | (Movq, _)) -> (
     match operand_list with
-    | [src; dest] -> [resolve_src m src; resolve_dest m dest]
-    | _ -> failwith "Interpret single SRC error!")
+    | [src; dest] -> [resolve_value m src; resolve_value m dest]
+    | _ -> failwith "interp_operands: Interpret single SRC error!")
   
 
     
@@ -341,21 +345,21 @@ let operand_type_check (operand: operand) (desiredType: operandType) : unit =
   | Imm _ -> (
     match desiredType with
     | (SRC | AMT) -> ()
-    | _ -> failwith "Incorrect operand type!, ")
+    | _ -> failwith "operand_type_check: Incorrect operand type!, ")
   | Reg _ ->(
     match desiredType with
     | (SRC | DEST | REG) -> ()
-    | _ -> failwith "Incorrect operand type!")
+    | _ -> failwith "operand_type_check: Incorrect operand type!")
   | (Ind1 _ | Ind2 _ | Ind3 _) ->(
     match desiredType with
     | (SRC | DEST | IND) -> ()
-    | _ -> failwith "Incorrect operand type!")
+    | _ -> failwith "operand_type_check: Incorrect operand type!")
 
 let rec operand_list_type_check (actual: operand list) (expect: operandType list) : unit =
   (* 惊为天人的写法！将两个列表同时进行模式匹配！*)
   match (actual, expect) with
   | ([], []) -> ()
-  | ((_, []) | ([], _)) -> failwith "Illegal operand num!"
+  | ((_, []) | ([], _)) -> failwith "operand_list_type_check: Illegal operand num!"
   | (actual_operand :: atl, expect_type :: etl) -> (
     operand_type_check actual_operand expect_type;
     operand_list_type_check (atl) (etl))
@@ -383,7 +387,7 @@ let rec crack : ins -> ins list = function
     [(Movq, [Ind2 Rsp; dest]); (Addq, [Imm(Lit 8L); Reg Rsp])] 
   | (Callq, [src]) ->
     crack ((Pushq, [Reg Rip])) @ [(Movq, [src; Reg Rip])]
-  | ((Callq, _) | (Pushq, _) | (Popq, _)) -> failwith "Illegal crack ins operand type!"
+  | ((Callq, _) | (Pushq, _) | (Popq, _)) -> failwith "crack: Illegal crack ins operand type!"
   | _ as instr -> [instr]
  
 (* TODO: double check against spec *)
