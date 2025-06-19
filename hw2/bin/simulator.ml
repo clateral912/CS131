@@ -306,7 +306,6 @@ let interp_opcode (m: mach) (o:opcode) (args:int64 list) : Int64_overflow.t =
       | Sarq, [amt; dest] -> ok(Int64.shift_right (dest) (Int64.to_int amt))
       | Shlq, [amt; dest] -> ok(Int64.shift_left (dest) (Int64.to_int amt))
       | Shrq, [amt; dest] -> ok(Int64.shift_right_logical (dest) (Int64.to_int amt))
-      | Cmpq, [src1; src2] -> sub (src2) (src1)
       | Leaq, [ind; dest] -> ok(ind)
       | Movq, [src; dest] -> ok(src)
       | Set _, [dest] -> ok(dest) (* TODO：set需要手动计算！*)
@@ -365,7 +364,7 @@ let ins_writeback (m: mach) : ins -> int64 -> unit  =
 
 
 (* mem addr ---> mem array index *)
-(* 事实：只有src需要解析到值，dest则只需要解析到地址*)
+(* 将所有operand全部解析到值，除了leaq*)
 let interp_operands (m:mach) (instr: ins) : int64 list = 
   let (opcode, operand_list) = instr in 
   match (opcode, operand_list) with
@@ -393,14 +392,18 @@ let interp_operands (m:mach) (instr: ins) : int64 list =
     | _ -> failwith "interp_operands: Interpret single SRC error!")
   
   
-type operandType = DEST | SRC | AMT | IND | REG
+type operandType = DEST | SRC | AMT | IND | REG | IMM 
 
 let operand_type_check (operand: operand) (desiredType: operandType) : unit =
   match operand with 
   | Imm _ -> (
     match desiredType with
-    | (SRC | AMT) -> ()
-    | _ -> failwith "operand_type_check: Incorrect operand type!, ")
+    | (SRC | AMT | IMM) -> ()
+    | _ -> failwith "operand_type_check: Incorrect operand type! ")
+  | Reg Rcx ->(
+    match desiredType with
+    | (SRC | DEST | REG | AMT) -> ()
+    | _ -> failwith "operand_type_check: Incorrect operand type!")
   | Reg _ ->(
     match desiredType with
     | (SRC | DEST | REG) -> ()
@@ -409,6 +412,7 @@ let operand_type_check (operand: operand) (desiredType: operandType) : unit =
     match desiredType with
     | (SRC | DEST | IND) -> ()
     | _ -> failwith "operand_type_check: Incorrect operand type!")
+  
 
 let rec operand_list_type_check (actual: operand list) (expect: operandType list) : unit =
   (* 惊为天人的写法！将两个列表同时进行模式匹配！*)
@@ -429,7 +433,7 @@ let validate_operands (instruction: ins) : unit =
   | (Sarq | Shlq | Shrq ) -> check [AMT; DEST]
   | (Addq | Subq | Andq | Orq | Xorq | Movq) -> check [SRC; DEST]
   | Leaq -> check [IND; DEST]
-  | Cmpq -> check [SRC; SRC]
+  | Cmpq -> check [SRC; IMM]
   | Imulq -> check [SRC; REG]
 
 
@@ -438,6 +442,8 @@ let rec crack : ins -> ins list = function
   (* 惊为天人的写法：同时匹配两个参数！*)
   | (Retq, []) ->
     crack ((Popq, [Reg Rip]))
+  | (Cmpq, [src1; src2]) ->
+    [(Subq, [src1; src2])]
   | (Pushq, [src]) -> 
     [(Subq, [Imm(Lit 8L); Reg Rsp]); (Movq, [src ;Ind2 Rsp])]
   | (Popq, [dest]) ->
@@ -451,7 +457,71 @@ let rec crack : ins -> ins list = function
  
 (* TODO: double check against spec *)
 let set_flags (m:mach) (op:opcode) (ws: quad list) (w : Int64_overflow.t) : unit =
-  failwith "set_flags not implemented"
+  let setSF () = m.flags.fs <- true in
+  let setZF () = m.flags.fz <- true in
+  let setOF () = m.flags.fo <- true in
+
+  let resetSF () = m.flags.fs <- false in
+  let resetZF ()= m.flags.fz <- false in
+  let resetOF ()= m.flags.fo <- false in
+
+  let 
+    update_sf_zf (res: Int64_overflow.t) : unit =
+      let res = res.value in
+      if res < 0L then setSF () else resetSF ();
+      if res = 0L then setZF () else resetZF ()
+  in
+  let update_of (res: Int64_overflow.t) : unit = 
+    if res.overflow then setOF () else resetOF()
+  in 
+  let update_shift (res: Int64_overflow.t) (op: opcode) : unit =
+    let amt_val, dest = match ws with 
+      | [amt; dest] -> amt, dest
+      | _ -> failwith "set_flags: Illegal operand for sarq" 
+    in
+    if amt_val <> 0L then 
+      update_sf_zf w;
+    match op with
+    | Sarq -> 
+      if amt_val = 1L then resetOF () else ()
+    | Shlq -> 
+      if amt_val = 1L then
+        let dest_msb = Int64.shift_right_logical (dest) 62 in
+        match dest_msb with
+        | (0L | 3L) -> resetOF ()
+        | _ -> setOF ()
+      else
+        ()
+    | Shrq ->
+      if amt_val <> 0L then(
+        if res.value = 0L then setZF () else resetZF ();
+        let res_msb = Int64.shift_right_logical (res.value) 63 in
+        match res_msb with
+          | 1L -> setSF ()
+          | _ -> resetSF ();
+        if amt_val = 1L then
+          let dest_msb = Int64.shift_right_logical (dest) 63 in
+          match dest_msb with
+          | 1L -> setOF ()
+          | _ -> resetOF ())
+      else ()
+    | _ -> failwith "update_shift: Not a shift opcode!"
+
+  in
+  match op with
+  | Negq -> 
+    let dest_val = match ws with 
+      | [dest] -> dest 
+      | _ -> failwith "set_flags: Illegal operand for negq" 
+    in
+      if dest_val = Int64.min_int then setOF () else resetOF ()
+  | (Sarq | Shlq | Shrq) -> update_shift w op
+  | (Andq | Orq | Xorq) -> resetOF ()
+  | _ -> update_sf_zf w; update_of w 
+
+
+
+
 
 let step (m:mach) : unit =
   (* execute an instruction *)
