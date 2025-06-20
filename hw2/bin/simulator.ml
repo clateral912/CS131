@@ -445,9 +445,9 @@ let rec crack : ins -> ins list = function
   | (Retq, []) ->
     crack ((Popq, [Reg Rip]))
   | (Pushq, [src]) -> 
-    [(Leaq, [Ind3 (Lit (-8L), Rsp); Reg Rsp]); (Movq, [src ;Ind2 Rsp])]
+    [(Subq, [Imm (Lit 8L); Reg Rsp]); (Movq, [src ;Ind2 Rsp])]
   | (Popq, [dest]) ->
-    [(Movq, [Ind2 Rsp; dest]); (Leaq, [Ind3 (Lit (8L), Rsp); Reg Rsp]);] 
+    [(Movq, [Ind2 Rsp; dest]); (Addq, [Imm (Lit 8L); Reg Rsp])] 
   | (Callq, [src]) ->
     crack ((Pushq, [Reg Rip])) @ [(Movq, [src; Reg Rip])]
   | (Jmp, [src]) -> 
@@ -522,10 +522,6 @@ let set_flags (m:mach) (op:opcode) (ws: quad list) (w : Int64_overflow.t) : unit
   | (Notq | Set _ | Leaq | Movq | Pushq | Popq | Jmp | Callq | Retq | J _) -> ()
   | _ -> update_sf_zf w; update_of w 
 
-
-
-
-
 let step (m:mach) : unit =
   (* execute an instruction *)
   let (op, args) as ins = fetchins m m.regs.(rind Rip) in
@@ -544,7 +540,10 @@ let step (m:mach) : unit =
      let ws = interp_operands m u in
      let res = interp_opcode m uop ws in
      ins_writeback m u @@ res.Int64_overflow.value;
-     set_flags m op ws res
+
+     if uop = Popq || uop = Pushq then () else 
+      set_flags m op ws res
+     
     ) uops
 
 (* Runs the machine until the rip register reaches a designated
