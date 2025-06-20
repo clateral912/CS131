@@ -584,11 +584,44 @@ exception Redefined_sym of lbl
 
   HINT: List.fold_left and List.fold_right are your friends.
  *)
+
 let is_size (is: ins list): quad = 
-  failwith "is_size not implemented"
+  let rec get_size (is: ins list) (cnt: quad) : quad = 
+    match is with
+    | [] -> cnt
+    | h :: tl -> get_size tl (Int64.add cnt 8L)  (* 每个指令的长度为8byte *)
+  in
+  get_size is 0L
 
 let ds_size (ds: data list): quad = 
-  failwith "ds_size not implemented"
+  let rec get_size (ds: data list) (cnt: quad) : quad = 
+    match ds with
+    | [] -> cnt
+    | h :: tl -> (
+      match h with
+      | (Quad _) -> get_size tl (cnt +. 8L)
+      (* 每个字符串的长度为(n + 1)byte 不含终止符\0, 虽然OCaml中字符串不需要有终止符 *)
+      | (Asciz str) -> get_size tl (cnt +. Int64.of_int (String.length str + 1)))
+  in
+  get_size ds 0L
+
+type programSize = {
+  text_size: quad;
+  data_size: quad
+}
+let prog_size (p: prog) : programSize = 
+  let elem_size (((text_acc, data_acc)): quad * quad) (elem: elem): quad * quad = 
+    match elem.asm with
+    | Text text -> (text_acc +. is_size text, data_acc)
+    | Data data -> (text_acc, data_acc +. ds_size data)
+  in
+  let 
+    (final_text_size, final_data_size) = List.fold_left elem_size (0L, 0L) p 
+  in  
+  {text_size = final_data_size; 
+  data_size = final_data_size}
+    
+
 
 let assemble (p:prog) : exec =
   failwith "assemble unimplemented"
