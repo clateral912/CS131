@@ -283,7 +283,7 @@ let resolve_addr (m: mach) (operand: operand) : int64 =
   | Ind1 (Lit offset) -> (m.regs.(rind Rip) +. offset) (* TODO: 严重错误！没有考虑string*)
   | Ind2 name -> m.regs.(rind name)
   | Ind3 (Lit offset, name) -> (m.regs.(rind name) +. offset)
-  | _ -> failwith "resolve_addr: Resolve ADDR error!"
+  | _ -> failwith ("resolve_addr: Resolve ADDR error!" ^ (string_of_operand operand))
 
 
 (* Compute the instruction result.
@@ -376,7 +376,7 @@ let interp_operands (m:mach) (instr: ins) : int64 list =
     | _ -> failwith "interp_operands: Interpret cmpq error!")
   | (Leaq, _) ->(
     match operand_list with
-    | [ind; dest] -> [resolve_addr m ind; resolve_addr m dest]
+    | [ind; dest] -> [resolve_addr m ind; resolve_value m dest]
     | _ -> failwith "interp_operands: Interpret leaq error!")
   | ((Pushq, _) | (Jmp, _) | (J _, _) | (Callq, _)) -> (
     match operand_list with
@@ -445,9 +445,9 @@ let rec crack : ins -> ins list = function
   | (Retq, []) ->
     crack ((Popq, [Reg Rip]))
   | (Pushq, [src]) -> 
-    [(Subq, [Imm(Lit 8L); Reg Rsp]); (Movq, [src ;Ind2 Rsp])]
+    [(Leaq, [Ind3 (Lit (-8L), Rsp); Reg Rsp]); (Movq, [src ;Ind2 Rsp])]
   | (Popq, [dest]) ->
-    [(Movq, [Ind2 Rsp; dest]); (Addq, [Imm(Lit 8L); Reg Rsp])] 
+    [(Movq, [Ind2 Rsp; dest]); (Leaq, [Ind3 (Lit (8L), Rsp); Reg Rsp]);] 
   | (Callq, [src]) ->
     crack ((Pushq, [Reg Rip])) @ [(Movq, [src; Reg Rip])]
   | (Jmp, [src]) -> 
@@ -510,13 +510,16 @@ let set_flags (m:mach) (op:opcode) (ws: quad list) (w : Int64_overflow.t) : unit
   in
   match op with
   | Negq -> 
+    update_sf_zf w;
     let dest_val = match ws with 
       | [dest] -> dest 
       | _ -> failwith "set_flags: Illegal operand for negq" 
     in
       if dest_val = Int64.min_int then setOF () else resetOF ()
   | (Sarq | Shlq | Shrq) -> update_shift w op
-  | (Andq | Orq | Xorq) -> resetOF ()
+  | (Andq | Orq | Xorq) -> update_sf_zf w; resetOF ()
+  (* 不需要修改标志位的opcode *)
+  | (Notq | Set _ | Leaq | Movq | Pushq | Popq | Jmp | Callq | Retq | J _) -> ()
   | _ -> update_sf_zf w; update_of w 
 
 
