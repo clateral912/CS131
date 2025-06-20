@@ -293,7 +293,7 @@ let interp_opcode (m: mach) (o:opcode) (args:int64 list) : Int64_overflow.t =
     let open Int64 in
     let open Int64_overflow in
     match o, args with
-      | Negq, [dest; _] -> neg (dest)
+      | Negq, [dest] -> neg (dest)
       | Addq, [src; dest] -> add (src) (dest)
       | Subq, [src; dest] -> sub (dest) (src)
       | Imulq, [src; reg] -> mul (src) (reg)
@@ -308,6 +308,7 @@ let interp_opcode (m: mach) (o:opcode) (args:int64 list) : Int64_overflow.t =
       | Shrq, [amt; dest] -> ok(Int64.shift_right_logical (dest) (Int64.to_int amt))
       | Leaq, [ind; dest] -> ok(ind)
       | Movq, [src; dest] -> ok(src)
+      | Cmpq, [src1; src2] -> sub (src2) (src1)
       | Set _, [dest] -> ok(dest) (* TODO：set需要手动计算！*)
       | Jmp, [src] -> ok(src)
       | J _, [src] -> ok(src)
@@ -399,19 +400,19 @@ let operand_type_check (operand: operand) (desiredType: operandType) : unit =
   | Imm _ -> (
     match desiredType with
     | (SRC | AMT | IMM) -> ()
-    | _ -> failwith "operand_type_check: Incorrect operand type! ")
+    | _ -> failwith "operand_type_check: Imm Incorrect operand type! ")
   | Reg Rcx ->(
     match desiredType with
     | (SRC | DEST | REG | AMT) -> ()
-    | _ -> failwith "operand_type_check: Incorrect operand type!")
+    | _ -> failwith "operand_type_check: Reg Rcx Incorrect operand type!")
   | Reg _ ->(
     match desiredType with
     | (SRC | DEST | REG) -> ()
-    | _ -> failwith "operand_type_check: Incorrect operand type!")
+    | _ -> failwith "operand_type_check: Reg _ Incorrect operand type!")
   | (Ind1 _ | Ind2 _ | Ind3 _) ->(
     match desiredType with
     | (SRC | DEST | IND) -> ()
-    | _ -> failwith "operand_type_check: Incorrect operand type!")
+    | _ -> failwith "operand_type_check: Ind Incorrect operand type!")
   
 
 let rec operand_list_type_check (actual: operand list) (expect: operandType list) : unit =
@@ -433,17 +434,16 @@ let validate_operands (instruction: ins) : unit =
   | (Sarq | Shlq | Shrq ) -> check [AMT; DEST]
   | (Addq | Subq | Andq | Orq | Xorq | Movq) -> check [SRC; DEST]
   | Leaq -> check [IND; DEST]
-  | Cmpq -> check [SRC; IMM]
+  | Cmpq -> check [SRC; DEST] (* SRC2不能是立即数，非立即数的SRC就是DEST类型*)
   | Imulq -> check [SRC; REG]
 
 
 
 let rec crack : ins -> ins list = function
   (* 惊为天人的写法：同时匹配两个参数！*)
+  (* 不能将Cmpq crack为Subq，因为Cmpq不修改寄存器或内存*)
   | (Retq, []) ->
     crack ((Popq, [Reg Rip]))
-  | (Cmpq, [src1; src2]) ->
-    [(Subq, [src1; src2])]
   | (Pushq, [src]) -> 
     [(Subq, [Imm(Lit 8L); Reg Rsp]); (Movq, [src ;Ind2 Rsp])]
   | (Popq, [dest]) ->
