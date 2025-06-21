@@ -651,7 +651,7 @@ let prog_size (p : prog) : programSize =
     | Data data -> text_acc, data_acc +. ds_size data
   in
   let final_text_size, final_data_size = List.fold_left elem_size (0L, 0L) p in
-  { text_size = final_data_size; data_size = final_data_size }
+  { text_size = final_text_size; data_size = final_data_size }
 ;;
 
 let rec build_symbol_table (p : prog) (text_pos : quad) (data_pos : quad)
@@ -740,19 +740,32 @@ let rec serialize (p : prog) : sbyte list * sbyte list =
   List.fold_left handle_elem ([], []) p
 ;;
 
+let rec string_of_symbol_table (symbol_table : (lbl * quad) list) : string =
+  match symbol_table with
+  | [] -> "\n"
+  | (lbl, addr) :: tl ->
+    string_of_lbl lbl
+    ^ string_of_int (Int64.to_int addr)
+    ^ "\n"
+    ^ string_of_symbol_table tl
+;;
+
 let assemble (p : prog) : exec =
   let size = prog_size p in
-  let symbol_table = build_symbol_table p size.text_size size.data_size in
+  let data_pos = mem_bot +. size.text_size in
+  let symbol_table = build_symbol_table p mem_bot data_pos in
   let () = if_duplicate_label symbol_table in
   let main_addr = find_label symbol_table "main" in
   let p = resolve_label p symbol_table in
   let text_seg, data_seg = serialize p in
-  { entry = main_addr
-  ; text_pos = mem_bot
-  ; data_pos = mem_bot +. size.text_size
-  ; text_seg
-  ; data_seg
-  }
+  (*
+     DEBUG ONLY:
+     print_string (string_of_prog p);
+     print_string "\n~~~~~~~Symbol Table~~~~~~~~~~\n";
+     print_string (string_of_symbol_table symbol_table);
+     print_string "\n-----------------------------\n";
+  *)
+  { entry = main_addr; text_pos = mem_bot; data_pos; text_seg; data_seg }
 ;;
 
 (* Convert an object file into an executable machine state.
