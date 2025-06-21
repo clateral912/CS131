@@ -686,24 +686,29 @@ let if_duplicate_label (symbol_table : (lbl * quad) list) =
   find_duplicate sorted_table
 ;;
 
-let rec find_label (symbol_table : (lbl * quad) list) (label : lbl) : operand =
+let rec find_label (symbol_table : (lbl * quad) list) (label : lbl) : quad =
   match symbol_table with
   | [] -> raise (Undefined_sym label)
-  | (symbol, addr) :: tl -> if symbol = label then Imm (Lit addr) else find_label tl label
+  | (symbol, addr) :: tl -> if symbol = label then addr else find_label tl label
+;;
+
+let replace_label_operand (symbol_table : (lbl * quad) list) (operand : operand) : operand
+  =
+  match operand with
+  | Imm (Lbl lbl) -> Imm (Lit (find_label symbol_table lbl))
+  | Ind1 (Lbl lbl) -> Ind1 (Lit (find_label symbol_table lbl))
+  | Ind3 (Lbl lbl, reg) -> Ind3 (Lit (find_label symbol_table lbl), reg)
+  | _ -> operand
 ;;
 
 let rec resolve_label (p : prog) (symbol_table : (lbl * quad) list) : prog =
   let rec resolve_ins_list (ins_list : ins list) : ins list =
-    let handle_imm_label (operand : operand) : operand =
-      match operand with
-      | Imm (Lbl lbl) -> find_label symbol_table lbl
-      | _ -> operand
-    in
     match ins_list with
     | [] -> []
     | ins :: tl ->
       let opcode, operands = ins in
-      (opcode, List.map handle_imm_label operands) :: resolve_ins_list tl
+      (opcode, List.map (replace_label_operand symbol_table) operands)
+      :: resolve_ins_list tl
   in
   let resolve_elem_label (elem : elem) : elem =
     match elem.asm with
@@ -739,12 +744,7 @@ let assemble (p : prog) : exec =
   let size = prog_size p in
   let symbol_table = build_symbol_table p size.text_size size.data_size in
   let () = if_duplicate_label symbol_table in
-  let main_lable_operand = find_label symbol_table "main" in
-  let main_addr =
-    match main_lable_operand with
-    | Imm (Lit addr) -> addr
-    | _ -> failwith "assemble: bad entry point"
-  in
+  let main_addr = find_label symbol_table "main" in
   let p = resolve_label p symbol_table in
   let text_seg, data_seg = serialize p in
   { entry = main_addr
