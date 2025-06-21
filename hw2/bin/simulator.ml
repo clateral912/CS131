@@ -686,18 +686,18 @@ let if_duplicate_label (symbol_table : (lbl * quad) list) =
   find_duplicate sorted_table
 ;;
 
-let rec find_label (symbol_table : (lbl * quad) list) (label : lbl) : quad =
+let rec label_to_addr (symbol_table : (lbl * quad) list) (label : lbl) : quad =
   match symbol_table with
   | [] -> raise (Undefined_sym label)
-  | (symbol, addr) :: tl -> if symbol = label then addr else find_label tl label
+  | (symbol, addr) :: tl -> if symbol = label then addr else label_to_addr tl label
 ;;
 
 let replace_label_operand (symbol_table : (lbl * quad) list) (operand : operand) : operand
   =
   match operand with
-  | Imm (Lbl lbl) -> Imm (Lit (find_label symbol_table lbl))
-  | Ind1 (Lbl lbl) -> Ind1 (Lit (find_label symbol_table lbl))
-  | Ind3 (Lbl lbl, reg) -> Ind3 (Lit (find_label symbol_table lbl), reg)
+  | Imm (Lbl lbl) -> Imm (Lit (label_to_addr symbol_table lbl))
+  | Ind1 (Lbl lbl) -> Ind1 (Lit (label_to_addr symbol_table lbl))
+  | Ind3 (Lbl lbl, reg) -> Ind3 (Lit (label_to_addr symbol_table lbl), reg)
   | _ -> operand
 ;;
 
@@ -752,10 +752,11 @@ let rec string_of_symbol_table (symbol_table : (lbl * quad) list) : string =
 
 let assemble (p : prog) : exec =
   let size = prog_size p in
+  let text_pos = mem_bot in
   let data_pos = mem_bot +. size.text_size in
-  let symbol_table = build_symbol_table p mem_bot data_pos in
+  let symbol_table = build_symbol_table p text_pos data_pos in
   let () = if_duplicate_label symbol_table in
-  let main_addr = find_label symbol_table "main" in
+  let main_addr = label_to_addr symbol_table "main" in
   let p = resolve_label p symbol_table in
   let text_seg, data_seg = serialize p in
   (*
@@ -765,7 +766,7 @@ let assemble (p : prog) : exec =
      print_string (string_of_symbol_table symbol_table);
      print_string "\n-----------------------------\n";
   *)
-  { entry = main_addr; text_pos = mem_bot; data_pos; text_seg; data_seg }
+  { entry = main_addr; text_pos; data_pos; text_seg; data_seg }
 ;;
 
 (* Convert an object file into an executable machine state.
@@ -781,6 +782,21 @@ let assemble (p : prog) : exec =
    Hint: The Array.make, Array.blit, and Array.of_list library functions
    may be of use.
 *)
+
 let load { entry; text_pos; data_pos; text_seg; data_seg } : mach =
-  failwith "load not implemented"
+  let seg = Array.of_list(text_seg @ data_seg) in
+  (* 不能使用\0, 而应该使用\x00*)
+  let mem = Array.make mem_size (Byte '\x00') in
+  let size = Array.length seg in
+  Array.blit seg 0 mem 0 size;
+  let regs =
+    [ 0L; 1L; 2L; 3L; 4L; 5L; 6L; 7L; 8L; 9L; 10L; 11L; 12L; 13L; 14L; 15L; 16L ]
+  in
+  let regs = Array.of_list regs in
+  regs.(rind Rsp) <- 0x40FFF8L;
+  regs.(rind Rip) <- entry;
+  let flags = { fo = false; fs = false; fz = false } in
+  let m = { flags; regs; mem } in
+  writequad m 0x40FFF8L exit_addr;
+  m
 ;;
