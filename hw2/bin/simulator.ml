@@ -694,16 +694,16 @@ let rec find_label (symbol_table : (lbl * quad) list) (label : lbl) : operand =
 
 let rec resolve_label (p : prog) (symbol_table : (lbl * quad) list) : prog =
   let rec resolve_ins_list (ins_list : ins list) : ins list =
-    let handle_imm_label (operand: operand): operand = 
+    let handle_imm_label (operand : operand) : operand =
       match operand with
       | Imm (Lbl lbl) -> find_label symbol_table lbl
       | _ -> operand
-    in  
+    in
     match ins_list with
     | [] -> []
     | ins :: tl ->
       let opcode, operands = ins in
-      (opcode, List.map handle_imm_label operands) :: resolve_ins_list tl 
+      (opcode, List.map handle_imm_label operands) :: resolve_ins_list tl
   in
   let resolve_elem_label (elem : elem) : elem =
     match elem.asm with
@@ -711,20 +711,48 @@ let rec resolve_label (p : prog) (symbol_table : (lbl * quad) list) : prog =
     | Text text ->
       let ins_list = text in
       let resolved_ins_list = resolve_ins_list ins_list in
-      { lbl = elem.lbl; global = elem.global; asm = Text (resolved_ins_list) }
+      { lbl = elem.lbl; global = elem.global; asm = Text resolved_ins_list }
   in
   match p with
   | [] -> []
   | elem :: tl -> resolve_elem_label elem :: resolve_label tl symbol_table
 ;;
 
+let rec serialize (p : prog) : sbyte list * sbyte list =
+  let rec asm_serialize (asm : asm) : sbyte list =
+    match asm with
+    | Text [] | Data [] -> []
+    | Text (instr :: tl) -> sbytes_of_ins instr @ asm_serialize (Text tl)
+    | Data (data :: tl) -> sbytes_of_data data @ asm_serialize (Data tl)
+  in
+  let handle_elem ((prev_text, prev_data) : sbyte list * sbyte list) (e : elem)
+    : sbyte list * sbyte list
+    =
+    match e.asm with
+    | Text text -> prev_text @ asm_serialize e.asm, prev_data
+    | Data data -> prev_text, prev_data @ asm_serialize e.asm
+  in
+  List.fold_left handle_elem ([], []) p
+;;
+
 let assemble (p : prog) : exec =
   let size = prog_size p in
   let symbol_table = build_symbol_table p size.text_size size.data_size in
   let () = if_duplicate_label symbol_table in
+  let main_lable_operand = find_label symbol_table "main" in
+  let main_addr =
+    match main_lable_operand with
+    | Imm (Lit addr) -> addr
+    | _ -> failwith "assemble: bad entry point"
+  in
   let p = resolve_label p symbol_table in
-
-  failwith ""
+  let text_seg, data_seg = serialize p in
+  { entry = main_addr
+  ; text_pos = mem_bot
+  ; data_pos = mem_bot +. size.text_size
+  ; text_seg
+  ; data_seg
+  }
 ;;
 
 (* Convert an object file into an executable machine state.
