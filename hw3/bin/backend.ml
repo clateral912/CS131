@@ -2,7 +2,6 @@
 
 open Ll
 open X86
-
 module Platform = Util.Platform
 
 (* Overview ----------------------------------------------------------------- *)
@@ -12,19 +11,26 @@ module Platform = Util.Platform
    plan for implementing the compiler is provided on the project web page.
 *)
 
-
 (* helpers ------------------------------------------------------------------ *)
 
 (* Map LL comparison operations to X86 condition codes *)
 let compile_cnd = function
-  | Ll.Eq  -> X86.Eq
-  | Ll.Ne  -> X86.Neq
+  | Ll.Eq -> X86.Eq
+  | Ll.Ne -> X86.Neq
   | Ll.Slt -> X86.Lt
   | Ll.Sle -> X86.Le
   | Ll.Sgt -> X86.Gt
   | Ll.Sge -> X86.Ge
+;;
 
-
+(* override some useful operators *)
+let ( +. ) = Int64.add
+let ( -. ) = Int64.sub
+let ( *. ) = Int64.mul
+let ( <. ) a b = Int64.compare a b < 0
+let ( >. ) a b = Int64.compare a b > 0
+let ( <=. ) a b = Int64.compare a b <= 0
+let ( >=. ) a b = Int64.compare a b >= 0
 
 (* locals and layout -------------------------------------------------------- *)
 
@@ -56,13 +62,13 @@ type layout = (uid * X86.operand) list
 
 (* A context contains the global type declarations (needed for getelementptr
    calculations) and a stack layout. *)
-type ctxt = { tdecls : (tid * ty) list
-            ; layout : layout
-            }
+type ctxt =
+  { tdecls : (tid * ty) list
+  ; layout : layout
+  }
 
 (* useful for looking up items in tdecls or layouts *)
 let lookup m x = List.assoc x m
-
 
 (* compiling operands  ------------------------------------------------------ *)
 
@@ -72,17 +78,17 @@ let lookup m x = List.assoc x m
    global addresses that must be computed from a label.  Constants are
    immediately available, and the operand Null is the 64-bit 0 value.
 
-     NOTE: two important facts about global identifiers:
+   NOTE: two important facts about global identifiers:
 
-     (1) You should use (Platform.mangle gid) to obtain a string
-     suitable for naming a global label on your platform (OS X expects
-     "_main" while linux expects "main").
+   (1) You should use (Platform.mangle gid) to obtain a string
+   suitable for naming a global label on your platform (OS X expects
+   "_main" while linux expects "main").
 
-     (2) 64-bit assembly labels are not allowed as immediate operands.
-     That is, the X86 code: movq _gid %rax which looks like it should
-     put the address denoted by _gid into %rax is not allowed.
-     Instead, you need to compute an %rip-relative address using the
-     leaq instruction:   leaq _gid(%rip) %rax.
+   (2) 64-bit assembly labels are not allowed as immediate operands.
+   That is, the X86 code: movq _gid %rax which looks like it should
+   put the address denoted by _gid into %rax is not allowed.
+   Instead, you need to compute an %rip-relative address using the
+   leaq instruction:   leaq _gid(%rip) %rax.
 
    One strategy for compiling instruction operands is to use a
    designated register (or registers) for holding the values being
@@ -91,10 +97,9 @@ let lookup m x = List.assoc x m
    the X86 instruction that moves an LLVM operand into a designated
    destination (usually a register).
 *)
-let compile_operand (ctxt:ctxt) (dest:X86.operand) : Ll.operand -> ins =
-  function _ -> failwith "compile_operand unimplemented"
-
-
+let compile_operand (ctxt : ctxt) (dest : X86.operand) : Ll.operand -> ins = function
+  | _ -> failwith "compile_operand unimplemented"
+;;
 
 (* compiling call  ---------------------------------------------------------- *)
 
@@ -147,9 +152,6 @@ let compile_operand (ctxt:ctxt) (dest:X86.operand) : Ll.operand -> ins =
   ]
 *)
 
-
-
-
 (* compiling getelementptr (gep)  ------------------------------------------- *)
 
 (* The getelementptr instruction computes an address by indexing into
@@ -162,7 +164,7 @@ let compile_operand (ctxt:ctxt) (dest:X86.operand) : Ll.operand -> ins =
 *)
 
 (* [size_ty] maps an LLVMlite type to a size in bytes.
-    (needed for getelementptr)
+   (needed for getelementptr)
 
    - the size of a struct is the sum of the sizes of each component
    - the size of an array of t's with n elements is n * the size of t
@@ -172,11 +174,9 @@ let compile_operand (ctxt:ctxt) (dest:X86.operand) : Ll.operand -> ins =
    - Void, i8, and functions have undefined sizes according to LLVMlite.
      Your function should simply return 0 in those cases
 *)
-let rec size_ty (tdecls:(tid * ty) list) (t:Ll.ty) : int =
-failwith "size_ty not implemented"
-
-
-
+let rec size_ty (tdecls : (tid * ty) list) (t : Ll.ty) : int =
+  failwith "size_ty not implemented"
+;;
 
 (* Generates code that computes a pointer value.
 
@@ -185,28 +185,29 @@ failwith "size_ty not implemented"
    2. the value of op is the base address of the calculation
 
    3. the first index in the path is treated as the index into an array
-     of elements of type t located at the base address
+   of elements of type t located at the base address
 
    4. subsequent indices are interpreted according to the type t:
 
-     - if t is a struct, the index must be a constant n and it
-       picks out the n'th element of the struct. [ NOTE: the offset
+   - if t is a struct, the index must be a constant n and it
+     picks out the n'th element of the struct. [ NOTE: the offset
        within the struct of the n'th element is determined by the
        sizes of the types of the previous elements ]
 
-     - if t is an array, the index can be any operand, and its
-       value determines the offset within the array.
+   - if t is an array, the index can be any operand, and its
+     value determines the offset within the array.
 
-     - if t is any other type, the path is invalid
+   - if t is any other type, the path is invalid
 
    5. if the index is valid, the remainder of the path is computed as
-      in (4), but relative to the type f the sub-element picked out
-      by the path so far
+   in (4), but relative to the type f the sub-element picked out
+   by the path so far
 *)
-let compile_gep (ctxt:ctxt) (op : Ll.ty * Ll.operand) (path: Ll.operand list) : ins list =
-failwith "compile_gep not implemented"
-
-
+let compile_gep (ctxt : ctxt) (op : Ll.ty * Ll.operand) (path : Ll.operand list)
+  : ins list
+  =
+  failwith "compile_gep not implemented"
+;;
 
 (* compiling instructions  -------------------------------------------------- *)
 
@@ -231,16 +232,15 @@ failwith "compile_gep not implemented"
 
    - Bitcast: does nothing interesting at the assembly level
 *)
-let compile_insn (ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.ins list =
-      failwith "compile_insn not implemented"
-
-
+let compile_insn (ctxt : ctxt) ((uid : uid), (i : Ll.insn)) : X86.ins list =
+  failwith "compile_insn not implemented"
+;;
 
 (* compiling terminators  --------------------------------------------------- *)
 
-(* prefix the function name [fn] to a label to ensure that the X86 labels are 
+(* prefix the function name [fn] to a label to ensure that the X86 labels are
    globally unique . *)
-let mk_lbl (fn:string) (l:string) = fn ^ "." ^ l
+let mk_lbl (fn : string) (l : string) = fn ^ "." ^ l
 
 (* Compile block terminators is not too difficult:
 
@@ -254,27 +254,26 @@ let mk_lbl (fn:string) (l:string) = fn ^ "." ^ l
 
    [fn] - the name of the function containing this terminator
 *)
-let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
+let compile_terminator (fn : string) (ctxt : ctxt) (t : Ll.terminator) : ins list =
   failwith "compile_terminator not implemented"
-
+;;
 
 (* compiling blocks --------------------------------------------------------- *)
 
-(* We have left this helper function here for you to complete. 
+(* We have left this helper function here for you to complete.
    [fn] - the name of the function containing this block
    [ctxt] - the current context
    [blk]  - LLVM IR code for the block
 *)
-let compile_block (fn:string) (ctxt:ctxt) (blk:Ll.block) : ins list =
+let compile_block (fn : string) (ctxt : ctxt) (blk : Ll.block) : ins list =
   failwith "compile_block not implemented"
+;;
 
 let compile_lbl_block fn lbl ctxt blk : elem =
   Asm.text (mk_lbl fn lbl) (compile_block fn ctxt blk)
-
-
+;;
 
 (* compile_fdecl ------------------------------------------------------------ *)
-
 
 (* Complete this helper function, which computes the location of the nth incoming
    function argument: either in a register or relative to %rbp,
@@ -286,8 +285,17 @@ let compile_lbl_block fn lbl ctxt blk : elem =
    [ NOTE: the first six arguments are numbered 0 .. 5 ]
 *)
 let arg_loc (n : int) : operand =
-failwith "arg_loc not implemented"
+  match n with
+  | 0 -> Reg Rdi
+  | 1 -> Reg Rsi
+  | 2 -> Reg Rdx
+  | 3 -> Reg Rcx
+  | 4 -> Reg R08
+  | 5 -> Reg R09
+  | x -> Ind3 (Lit (-8L -. (Int64.of_int (x - 5) *. 8L)), Rbp)
+;;
 
+(* 减去Iret *)
 
 (* We suggest that you create a helper function that computes the
    stack layout for a given function declaration.
@@ -296,10 +304,30 @@ failwith "arg_loc not implemented"
    - in this (inefficient) compilation strategy, each local id
      is also stored as a stack slot.
    - see the discussion about locals
-
 *)
-let stack_layout (args : uid list) ((block, lbled_blocks):cfg) : layout =
-failwith "stack_layout not implemented"
+let stack_layout (args : uid list) (cfg : cfg) : layout =
+  let rec args_layout (args : uid list) (size : int64) (layout : layout) : layout =
+    match args with
+    | [] -> layout
+    | arg :: tl ->
+      args_layout tl (size +. 1L) ((arg, Ind3 (Lit ((size +. 1L) *. (-8L)), Rbp)) :: layout)
+  in
+  let rec block_uid ({ insns; term } : block) : uid list =
+    let extract (acc : uid list) (insn : uid * insn) : uid list =
+      match insn with
+      | uid, _ -> uid :: acc
+    in
+    let term_uid, _ = term in
+    term_uid :: List.fold_left extract [] insns
+  in
+  let rec cfg_uid ((block, lbled_blocks) : cfg) : uid list =
+    match lbled_blocks with
+    | [] -> block_uid block
+    | (_, blk) :: tl -> block_uid blk @ cfg_uid (block, tl)
+  in
+  let all_uids = args @ cfg_uid cfg in
+  args_layout all_uids 0L [] 
+;;
 
 (* The code for the entry-point of a function must do several things:
 
@@ -317,28 +345,35 @@ failwith "stack_layout not implemented"
    - the function entry code should allocate the stack storage needed
      to hold all of the local stack slots.
 *)
-let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_param; f_cfg; _ }:fdecl) : prog =
-failwith "compile_fdecl unimplemented"
 
+let prelude ()
 
+let compile_fdecl
+  (tdecls : (tid * ty) list)
+  (name : string)
+  ({ f_param; f_cfg; _ } : fdecl)
+  : prog
+  =
+  failwith "compile_fdecl unimplemented"
+;;
 
 (* compile_gdecl ------------------------------------------------------------ *)
 (* Compile a global value into an X86 global data declaration and map
    a global uid to its associated X86 label.
 *)
 let rec compile_ginit : ginit -> X86.data list = function
-  | GNull     -> [Quad (Lit 0L)]
-  | GGid gid  -> [Quad (Lbl (Platform.mangle gid))]
-  | GInt c    -> [Quad (Lit c)]
-  | GString s -> [Asciz s]
+  | GNull -> [ Quad (Lit 0L) ]
+  | GGid gid -> [ Quad (Lbl (Platform.mangle gid)) ]
+  | GInt c -> [ Quad (Lit c) ]
+  | GString s -> [ Asciz s ]
   | GArray gs | GStruct gs -> List.map compile_gdecl gs |> List.flatten
-  | GBitcast (_t1,g,_t2) -> compile_ginit g
+  | GBitcast (_t1, g, _t2) -> compile_ginit g
 
 and compile_gdecl (_, g) = compile_ginit g
 
-
 (* compile_prog ------------------------------------------------------------- *)
-let compile_prog {tdecls; gdecls; fdecls; _} : X86.prog =
-  let g = fun (lbl, gdecl) -> Asm.data (Platform.mangle lbl) (compile_gdecl gdecl) in
-  let f = fun (name, fdecl) -> compile_fdecl tdecls name fdecl in
-  (List.map g gdecls) @ (List.map f fdecls |> List.flatten)
+let compile_prog { tdecls; gdecls; fdecls; _ } : X86.prog =
+  let g (lbl, gdecl) = Asm.data (Platform.mangle lbl) (compile_gdecl gdecl) in
+  let f (name, fdecl) = compile_fdecl tdecls name fdecl in
+  List.map g gdecls @ (List.map f fdecls |> List.flatten)
+;;
