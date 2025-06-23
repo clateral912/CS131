@@ -100,8 +100,9 @@ let lookup m x = List.assoc x m
    the X86 instruction that moves an LLVM operand into a designated
    destination (usually a register).
 *)
-let compile_operand (ctxt : ctxt) (dest : X86.operand) : Ll.operand -> ins = function
-  | _ -> failwith "compile_operand unimplemented"
+let compile_operand ({tdecls; layout} : ctxt) (dest : X86.operand) : Ll.operand -> ins = 
+  failwith ""
+
 ;;
 
 (* compiling call  ---------------------------------------------------------- *)
@@ -178,7 +179,14 @@ let compile_operand (ctxt : ctxt) (dest : X86.operand) : Ll.operand -> ins = fun
      Your function should simply return 0 in those cases
 *)
 let rec size_ty (tdecls : (tid * ty) list) (t : Ll.ty) : int =
-  failwith "size_ty not implemented"
+  match t with
+  | (Void | I8 | Fun _) -> 0
+  | Array(len, t) -> len * size_ty tdecls t
+  | (Ptr _ | I1 | I64) -> 8
+  | Namedt name -> size_ty tdecls ( lookup tdecls name)
+  | Struct ty_list -> 
+    let f (acc: int) (t: ty) = acc + size_ty tdecls t in
+    List.fold_left f 0 ty_list
 ;;
 
 (* Generates code that computes a pointer value.
@@ -258,7 +266,12 @@ let mk_lbl (fn : string) (l : string) = fn ^ "." ^ l
    [fn] - the name of the function containing this terminator
 *)
 let compile_terminator (fn : string) (ctxt : ctxt) (t : Ll.terminator) : ins list =
-  failwith "compile_terminator not implemented"
+  match t with
+  | Br lbl -> [(Jmp, [Imm(Lbl lbl)])]
+  (* TODO:实现Ll.operand转x86.operand *)
+  | Cbr (cnd, lbl1, lbl2) -> [(Cmpq, [Imm(Lit 0L); Imm(Lit 0L)]); (J Gt, [Imm(Lbl lbl1)]); (J Le, [Imm(Lbl lbl2)])]
+  | Ret (ty, None) -> [(Movq, [Reg Rbp; Reg Rsp]); (Popq, [Reg Rbp]); (Retq, [])]
+  | _ -> failwith "compile_terminator: not implemented yet!"
 ;;
 
 (* compiling blocks --------------------------------------------------------- *)
