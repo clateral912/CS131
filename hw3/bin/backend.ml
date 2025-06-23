@@ -23,6 +23,9 @@ let compile_cnd = function
   | Ll.Sge -> X86.Ge
 ;;
 
+(* 对于参数传递中结构体的处理：caller需要在栈上保存结构体本身，作为参数的永远是指向结构体本身的指针
+  callee永远会将结构体作为指针处理*)
+
 (* override some useful operators *)
 let ( +. ) = Int64.add
 let ( -. ) = Int64.sub
@@ -284,6 +287,8 @@ let compile_lbl_block fn lbl ctxt blk : elem =
 
    [ NOTE: the first six arguments are numbered 0 .. 5 ]
 *)
+(* 返回caller栈帧中args相对新rbp的位置offset，注意，caller的栈帧在高地址！因此你的地址是rbp + n 
+  而非rbp - n*)
 let arg_loc (n : int) : operand =
   match n with
   | 0 -> Reg Rdi
@@ -292,7 +297,7 @@ let arg_loc (n : int) : operand =
   | 3 -> Reg Rcx
   | 4 -> Reg R08
   | 5 -> Reg R09
-  | x -> Ind3 (Lit (-8L -. (Int64.of_int (x - 5) *. 8L)), Rbp)
+  | x -> Ind3 (Lit (8L +. (Int64.of_int (x - 5) *. 8L)), Rbp)
 ;;
 
 (* 减去Iret *)
@@ -305,12 +310,13 @@ let arg_loc (n : int) : operand =
      is also stored as a stack slot.
    - see the discussion about locals
 *)
-let stack_layout (args : uid list) (cfg : cfg) : layout =
-  let rec args_layout (args : uid list) (size : int64) (layout : layout) : layout =
+(* Layout结构：lbl_blocks(term_uid :: uids) :: entry_block(term_uid :: uids) :: args *)
+let stack_layout (args : uid list) (cfg : cfg) : layout * quad =
+  let rec args_layout (args : uid list) (size : int64) (layout : layout) : layout * quad =
     match args with
-    | [] -> layout
+    | [] -> layout, size
     | arg :: tl ->
-      args_layout tl (size +. 1L) ((arg, Ind3 (Lit ((size +. 1L) *. (-8L)), Rbp)) :: layout)
+      args_layout tl (size +. 1L) ((arg, Ind3 (Lit ((size +. 1L) *. -8L), Rbp)) :: layout)
   in
   let rec block_uid ({ insns; term } : block) : uid list =
     let extract (acc : uid list) (insn : uid * insn) : uid list =
@@ -325,10 +331,52 @@ let stack_layout (args : uid list) (cfg : cfg) : layout =
     | [] -> block_uid block
     | (_, blk) :: tl -> block_uid blk @ cfg_uid (block, tl)
   in
-  let all_uids = args @ cfg_uid cfg in
-  args_layout all_uids 0L [] 
+  let all_uids = cfg_uid cfg @ args in
+  args_layout all_uids 0L []
 ;;
 
+(* 在layout中找对应的uid，返回该uid相对于rbp的偏移量*)
+let rec layout_loc (layout : layout) (arg : uid) : quad =
+  match layout with
+  | [] -> failwith "layout_loc: cannot find arg in layout!"
+  | (uid, ind) :: tl ->
+    if arg = uid
+    then (
+      match ind with
+      | Ind3 (Lit x, Rbp) -> x
+      | _ -> failwith "layout_loc: illegal layout operand")
+    else layout_loc tl arg
+;;
+
+(*TODO: 处理外发参数大小和栈指针对其大小*)
+(* 在elem程序段的最后插入分配给定大小的栈的指令 *)
+let allocate_stack (size : quad) ({ lbl; global; asm = code } : elem) : X86.elem =
+  let alloca_ins : ins = Subq, [ Imm (Lit size); Reg Rsp ] in
+  match code with
+  | Text text -> { lbl; global; asm = Text (text @ [ alloca_ins ]) }
+  | Data _ -> failwith "allocate_stack: Illegal elem type!"
+;;
+
+(* 将regs和栈上的参数搬运到callee的locals中 *)
+let move_args_asm (layout: layout) (args: uid list) (num_args: int) : ins list = 
+  let handle_arg (i: int) (arg: uid) : ins list = 
+    let dest_offset = layout_loc layout arg in
+    let src_location = arg_loc i in
+    match src_location with
+    | (Reg _) as reg_loc -> [(Movq, [reg_loc; Ind3(Lit dest_offset, Rbp)])]
+    | _ as mem_loc -> [(Movq, [mem_loc; Reg Rax]); (Movq, [Reg Rax; Ind3(Lit dest_offset, Rbp)])]
+  in
+  List.flatten @@ List.mapi handle_arg args
+
+let prologue 
+  (name : string)
+  ({ f_param; f_cfg; _ } : fdecl)
+  : elem = 
+  let layout, stack_size = stack_layout f_param f_cfg in
+  let move_code = move_args_asm layout f_param (List.length f_param) in
+  let elem = {lbl = name; global = false; asm = Text(move_code)} in
+  allocate_stack stack_size elem
+  
 (* The code for the entry-point of a function must do several things:
 
    - since our simple compiler maps local %uids to stack slots,
@@ -346,15 +394,14 @@ let stack_layout (args : uid list) (cfg : cfg) : layout =
      to hold all of the local stack slots.
 *)
 
-let prelude ()
-
 let compile_fdecl
   (tdecls : (tid * ty) list)
   (name : string)
-  ({ f_param; f_cfg; _ } : fdecl)
+  ({ f_param; f_cfg; _ } as fdecl : fdecl)
   : prog
   =
-  failwith "compile_fdecl unimplemented"
+  let prologue_elem = prologue name fdecl in
+  [prologue_elem]
 ;;
 
 (* compile_gdecl ------------------------------------------------------------ *)
