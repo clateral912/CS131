@@ -322,6 +322,7 @@ let compile_terminator (fn : string) (ctxt : ctxt) (t : Ll.terminator) : ins lis
   match t with
   | Br lbl -> [ Jmp, [ Imm (Lbl lbl) ] ]
   | Cbr (cnd, lbl1, lbl2) ->
+    (* 注意！LLVM IR不允许Gid直接作为Cnd比较对象！比较对象必须为i1！无论如何你都要将其加载到Rax中！*)
     let load_cnd_ins = compile_operand ctxt (Reg Rax) cnd in
     [ load_cnd_ins ]
     @ [ Cmpq, [ Imm (Lit 0L); Reg Rax ]
@@ -339,7 +340,11 @@ let compile_terminator (fn : string) (ctxt : ctxt) (t : Ll.terminator) : ins lis
    [ctxt] - the current context
    [blk]  - LLVM IR code for the block
 *)
-let compile_block (fn : string) (ctxt : ctxt) (blk : Ll.block) : ins list = failwith ""
+let compile_block (fn : string) (ctxt : ctxt) (blk : Ll.block) : ins list =
+  let { insns; term = _, terminator } = blk in
+  let compiled_insns = List.flatten @@ List.map (compile_insn ctxt) insns in
+  compiled_insns @ compile_terminator fn ctxt terminator
+;;
 
 let compile_lbl_block fn lbl ctxt blk : elem =
   Asm.text (mk_lbl fn lbl) (compile_block fn ctxt blk)
@@ -406,11 +411,9 @@ let stack_layout (args : uid list) (cfg : cfg) : layout * quad =
 
 (*TODO: 处理外发参数大小和栈指针对其大小*)
 (* 在elem程序段的最后插入分配给定大小的栈的指令 *)
-let allocate_stack (size : quad) ({ lbl; global; asm = code } : elem) : X86.elem =
+let allocate_stack (size : quad) (code : ins list) : ins list =
   let alloca_ins : ins = Subq, [ Imm (Lit size); Reg Rsp ] in
-  match code with
-  | Text text -> { lbl; global; asm = Text (text @ [ alloca_ins ]) }
-  | Data _ -> failwith "allocate_stack: Illegal elem type!"
+  code @ [ alloca_ins ]
 ;;
 
 (* 将regs和栈上的参数搬运到callee的locals中 *)
@@ -426,11 +429,11 @@ let move_args_asm (layout : layout) (args : uid list) : ins list =
   List.flatten @@ List.mapi handle_arg args
 ;;
 
-let prologue (name : string) ({ f_param; f_cfg; _ } : fdecl) : elem =
-  let layout, stack_size = stack_layout f_param f_cfg in
-  let move_code = move_args_asm layout f_param in
-  let elem = { lbl = name; global = false; asm = Text move_code } in
-  allocate_stack stack_size elem
+let prologue (name : string) (params : uid list) (layout : layout) (stack_size : quad)
+  : ins list
+  =
+  let move_code = move_args_asm layout params in
+  allocate_stack stack_size move_code
 ;;
 
 (* The code for the entry-point of a function must do several things:
@@ -456,8 +459,17 @@ let compile_fdecl
   ({ f_param; f_cfg; _ } as fdecl : fdecl)
   : prog
   =
-  let prologue_elem = prologue name fdecl in
-  failwith ""
+  let f_layout, f_stack_size = stack_layout f_param f_cfg in
+  let ctxt = { tdecls; layout = f_layout } in
+  let entry_block, blocks = f_cfg in
+  (*加上entry块的所有基本块*)
+  let entry_block_insns = compile_block name ctxt entry_block in
+  let prologue_insns = prologue name f_param f_layout f_stack_size in
+  let entry_elem : elem =
+    { lbl = name; global = true; asm = Text (prologue_insns @ entry_block_insns) }
+  in
+  let f ((lbl, block) : lbl * block) : elem = compile_lbl_block name lbl ctxt block in
+  entry_elem :: List.map f blocks
 ;;
 
 (* compile_gdecl ------------------------------------------------------------ *)
