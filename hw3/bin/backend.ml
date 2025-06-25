@@ -24,7 +24,7 @@ let compile_cnd = function
 ;;
 
 (* 对于参数传递中结构体的处理：caller需要在栈上保存结构体本身，作为参数的永远是指向结构体本身的指针
-  callee永远会将结构体作为指针处理*)
+   callee永远会将结构体作为指针处理*)
 
 (* override some useful operators *)
 let ( +. ) = Int64.add
@@ -100,9 +100,30 @@ let lookup m x = List.assoc x m
    the X86 instruction that moves an LLVM operand into a designated
    destination (usually a register).
 *)
-let compile_operand ({tdecls; layout} : ctxt) (dest : X86.operand) : Ll.operand -> ins = 
-  failwith ""
+(* 将Null Const和Id的引用解析到值，对于全局变量，我们只是将全局变量的地址存入dest中，而不是搬运全局变量的值 *)
+let compile_operand ({ tdecls; layout } : ctxt) (dest : X86.operand) : Ll.operand -> ins
+  = function
+  | Null -> Movq, [ Imm (Lit 0L); dest ]
+  | Const x -> Movq, [ Imm (Lit x); dest ]
+  | Gid gid ->
+    let gid_label = Platform.mangle gid in
+    Leaq, [ Ind3 (Lbl gid_label, Rip); Reg Rax ]
+  | Id uid ->
+    let arg_operand = lookup layout uid in
+    Movq, [ arg_operand; dest ]
+;;
 
+(* 在layout中找对应的uid，返回该uid相对于rbp的偏移量*)
+let rec layout_loc (layout : layout) (arg : uid) : quad =
+  match layout with
+  | [] -> failwith "layout_loc: cannot find arg in layout!"
+  | (uid, ind) :: tl ->
+    if arg = uid
+    then (
+      match ind with
+      | Ind3 (Lit x, Rbp) -> x
+      | _ -> failwith "layout_loc: illegal layout operand")
+    else layout_loc tl arg
 ;;
 
 (* compiling call  ---------------------------------------------------------- *)
@@ -180,12 +201,12 @@ let compile_operand ({tdecls; layout} : ctxt) (dest : X86.operand) : Ll.operand 
 *)
 let rec size_ty (tdecls : (tid * ty) list) (t : Ll.ty) : int =
   match t with
-  | (Void | I8 | Fun _) -> 0
-  | Array(len, t) -> len * size_ty tdecls t
-  | (Ptr _ | I1 | I64) -> 8
-  | Namedt name -> size_ty tdecls ( lookup tdecls name)
-  | Struct ty_list -> 
-    let f (acc: int) (t: ty) = acc + size_ty tdecls t in
+  | Void | I8 | Fun _ -> 0
+  | Array (len, t) -> len * size_ty tdecls t
+  | Ptr _ | I1 | I64 -> 8
+  | Namedt name -> size_ty tdecls (lookup tdecls name)
+  | Struct ty_list ->
+    let f (acc : int) (t : ty) = acc + size_ty tdecls t in
     List.fold_left f 0 ty_list
 ;;
 
@@ -244,7 +265,39 @@ let compile_gep (ctxt : ctxt) (op : Ll.ty * Ll.operand) (path : Ll.operand list)
    - Bitcast: does nothing interesting at the assembly level
 *)
 let compile_insn (ctxt : ctxt) ((uid : uid), (i : Ll.insn)) : X86.ins list =
-  failwith "compile_insn not implemented"
+  let { tdecls = _; layout } = ctxt in
+  match i with
+  | Binop (bop, ty, op1, op2) ->
+    if ty <> I64
+    then failwith "compile_insn: illegal Binop ty"
+    else (
+      (* TODO: 确认bop的ty有什么用 *)
+      let load_operand_ins =
+        match bop with
+        (* 对于IR， sub op1, op2的顺序是op1 - op2, 而x86 asm的顺序是op2 - op1 *)
+        | Sub | Shl | Lshr | Ashr ->
+          [ compile_operand ctxt (Reg R11) op1; compile_operand ctxt (Reg Rcx) op2 ]
+        | _ -> [ compile_operand ctxt (Reg Rcx) op1; compile_operand ctxt (Reg R11) op2 ]
+      in
+      let llbop_to_opcode (llbop : bop) : opcode =
+        match llbop with
+        | Add -> Addq
+        | Sub -> Subq
+        | Mul -> Imulq
+        | Shl -> Shlq
+        | Lshr -> Shrq
+        | Ashr -> Sarq
+        | And -> Andq
+        | Or -> Orq
+        | Xor -> Xorq
+      in
+      let rev_ins_list =
+        (llbop_to_opcode bop, [ Reg Rcx; Reg R11 ]) :: load_operand_ins
+      in
+      let dest_loc = layout_loc layout uid in
+      let rev_ins_list = (Movq, [ Reg R11; Ind3 (Lit dest_loc, Rbp) ]) :: rev_ins_list in
+      List.rev rev_ins_list)
+  | _ -> failwith "compile_insn: Not implemented yet!"
 ;;
 
 (* compiling terminators  --------------------------------------------------- *)
@@ -267,10 +320,20 @@ let mk_lbl (fn : string) (l : string) = fn ^ "." ^ l
 *)
 let compile_terminator (fn : string) (ctxt : ctxt) (t : Ll.terminator) : ins list =
   match t with
-  | Br lbl -> [(Jmp, [Imm(Lbl lbl)])]
+  | Br lbl -> [ Jmp, [ Imm (Lbl lbl) ] ]
   (* TODO:实现Ll.operand转x86.operand *)
-  | Cbr (cnd, lbl1, lbl2) -> [(Cmpq, [Imm(Lit 0L); Imm(Lit 0L)]); (J Gt, [Imm(Lbl lbl1)]); (J Le, [Imm(Lbl lbl2)])]
-  | Ret (ty, None) -> [(Movq, [Reg Rbp; Reg Rsp]); (Popq, [Reg Rbp]); (Retq, [])]
+  | Cbr (cnd, lbl1, lbl2) ->
+    let tail =
+      [ Cmpq, [ Imm (Lit 0L); Reg Rax ]
+      ; J Gt, [ Imm (Lbl lbl1) ]
+      ; J Le, [ Imm (Lbl lbl2) ]
+      ]
+    in
+    (match cnd with
+     | Gid gid ->
+       compile_operand ctxt (Reg Rax) (Gid gid) :: (Movq, [ Ind2 Rax; Reg Rax ]) :: tail
+     | _ -> tail)
+  | Ret (_, None) -> [ Movq, [ Reg Rbp; Reg Rsp ]; Popq, [ Reg Rbp ]; Retq, [] ]
   | _ -> failwith "compile_terminator: not implemented yet!"
 ;;
 
@@ -300,8 +363,8 @@ let compile_lbl_block fn lbl ctxt blk : elem =
 
    [ NOTE: the first six arguments are numbered 0 .. 5 ]
 *)
-(* 返回caller栈帧中args相对新rbp的位置offset，注意，caller的栈帧在高地址！因此你的地址是rbp + n 
-  而非rbp - n*)
+(* 返回caller栈帧中args相对新rbp的位置offset，注意，caller的栈帧在高地址！因此你的地址是rbp + n
+   而非rbp - n*)
 let arg_loc (n : int) : operand =
   match n with
   | 0 -> Reg Rdi
@@ -348,19 +411,6 @@ let stack_layout (args : uid list) (cfg : cfg) : layout * quad =
   args_layout all_uids 0L []
 ;;
 
-(* 在layout中找对应的uid，返回该uid相对于rbp的偏移量*)
-let rec layout_loc (layout : layout) (arg : uid) : quad =
-  match layout with
-  | [] -> failwith "layout_loc: cannot find arg in layout!"
-  | (uid, ind) :: tl ->
-    if arg = uid
-    then (
-      match ind with
-      | Ind3 (Lit x, Rbp) -> x
-      | _ -> failwith "layout_loc: illegal layout operand")
-    else layout_loc tl arg
-;;
-
 (*TODO: 处理外发参数大小和栈指针对其大小*)
 (* 在elem程序段的最后插入分配给定大小的栈的指令 *)
 let allocate_stack (size : quad) ({ lbl; global; asm = code } : elem) : X86.elem =
@@ -371,25 +421,25 @@ let allocate_stack (size : quad) ({ lbl; global; asm = code } : elem) : X86.elem
 ;;
 
 (* 将regs和栈上的参数搬运到callee的locals中 *)
-let move_args_asm (layout: layout) (args: uid list) (num_args: int) : ins list = 
-  let handle_arg (i: int) (arg: uid) : ins list = 
+let move_args_asm (layout : layout) (args : uid list) : ins list =
+  let handle_arg (i : int) (arg : uid) : ins list =
     let dest_offset = layout_loc layout arg in
     let src_location = arg_loc i in
     match src_location with
-    | (Reg _) as reg_loc -> [(Movq, [reg_loc; Ind3(Lit dest_offset, Rbp)])]
-    | _ as mem_loc -> [(Movq, [mem_loc; Reg Rax]); (Movq, [Reg Rax; Ind3(Lit dest_offset, Rbp)])]
+    | Reg _ as reg_loc -> [ Movq, [ reg_loc; Ind3 (Lit dest_offset, Rbp) ] ]
+    | _ as mem_loc ->
+      [ Movq, [ mem_loc; Reg Rax ]; Movq, [ Reg Rax; Ind3 (Lit dest_offset, Rbp) ] ]
   in
   List.flatten @@ List.mapi handle_arg args
+;;
 
-let prologue 
-  (name : string)
-  ({ f_param; f_cfg; _ } : fdecl)
-  : elem = 
+let prologue (name : string) ({ f_param; f_cfg; _ } : fdecl) : elem =
   let layout, stack_size = stack_layout f_param f_cfg in
-  let move_code = move_args_asm layout f_param (List.length f_param) in
-  let elem = {lbl = name; global = false; asm = Text(move_code)} in
+  let move_code = move_args_asm layout f_param in
+  let elem = { lbl = name; global = false; asm = Text move_code } in
   allocate_stack stack_size elem
-  
+;;
+
 (* The code for the entry-point of a function must do several things:
 
    - since our simple compiler maps local %uids to stack slots,
@@ -414,7 +464,7 @@ let compile_fdecl
   : prog
   =
   let prologue_elem = prologue name fdecl in
-  [prologue_elem]
+  [ prologue_elem ]
 ;;
 
 (* compile_gdecl ------------------------------------------------------------ *)
@@ -429,7 +479,7 @@ let rec compile_ginit : ginit -> X86.data list = function
   | GArray gs | GStruct gs -> List.map compile_gdecl gs |> List.flatten
   | GBitcast (_t1, g, _t2) -> compile_ginit g
 
-and compile_gdecl (_, g) = compile_ginit g
+and compile_gdecl (lbl, g) = compile_ginit g
 
 (* compile_prog ------------------------------------------------------------- *)
 let compile_prog { tdecls; gdecls; fdecls; _ } : X86.prog =
