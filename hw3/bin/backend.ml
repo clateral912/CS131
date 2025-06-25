@@ -330,7 +330,18 @@ let compile_terminator (fn : string) (ctxt : ctxt) (t : Ll.terminator) : ins lis
       ; Jmp, [ Imm (Lbl lbl2) ]
       ]
   | Ret (_, None) -> [ Movq, [ Reg Rbp; Reg Rsp ]; Popq, [ Reg Rbp ]; Retq, [] ]
-  | _ -> failwith "compile_terminator: not implemented yet!"
+  (* TODO： 弄清楚ty的作用 *)
+  | Ret (_, Some operand) ->
+    let tail = [ Movq, [ Reg Rbp; Reg Rsp ]; Popq, [ Reg Rbp ]; Retq, [] ] in
+    (match operand with
+     | Null -> (Movq, [ Imm (Lit 0L); Reg Rax ]) :: tail
+     | Const x -> (Movq, [ Imm (Lit x); Reg Rax ]) :: tail
+     (* TODO: 没搞清楚return全局变量的意义何在 *)
+     | Gid gid -> (Movq, [ Imm (Lbl (Platform.mangle gid)); Reg Rax ]) :: tail
+     | Id uid ->
+       let { tdecls = _; layout } = ctxt in
+       let value_addr = layout_loc layout uid in
+       (Movq, [ Ind3 (Lit value_addr, Rbp); Reg Rax ]) :: tail)
 ;;
 
 (* compiling blocks --------------------------------------------------------- *)
