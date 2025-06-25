@@ -321,18 +321,13 @@ let mk_lbl (fn : string) (l : string) = fn ^ "." ^ l
 let compile_terminator (fn : string) (ctxt : ctxt) (t : Ll.terminator) : ins list =
   match t with
   | Br lbl -> [ Jmp, [ Imm (Lbl lbl) ] ]
-  (* TODO:实现Ll.operand转x86.operand *)
   | Cbr (cnd, lbl1, lbl2) ->
-    let tail =
-      [ Cmpq, [ Imm (Lit 0L); Reg Rax ]
-      ; J Gt, [ Imm (Lbl lbl1) ]
-      ; J Le, [ Imm (Lbl lbl2) ]
+    let load_cnd_ins = compile_operand ctxt (Reg Rax) cnd in
+    [ load_cnd_ins ]
+    @ [ Cmpq, [ Imm (Lit 0L); Reg Rax ]
+      ; J Neq, [ Imm (Lbl lbl1) ]
+      ; Jmp, [ Imm (Lbl lbl2) ]
       ]
-    in
-    (match cnd with
-     | Gid gid ->
-       compile_operand ctxt (Reg Rax) (Gid gid) :: (Movq, [ Ind2 Rax; Reg Rax ]) :: tail
-     | _ -> tail)
   | Ret (_, None) -> [ Movq, [ Reg Rbp; Reg Rsp ]; Popq, [ Reg Rbp ]; Retq, [] ]
   | _ -> failwith "compile_terminator: not implemented yet!"
 ;;
@@ -344,9 +339,7 @@ let compile_terminator (fn : string) (ctxt : ctxt) (t : Ll.terminator) : ins lis
    [ctxt] - the current context
    [blk]  - LLVM IR code for the block
 *)
-let compile_block (fn : string) (ctxt : ctxt) (blk : Ll.block) : ins list =
-  failwith "compile_block not implemented"
-;;
+let compile_block (fn : string) (ctxt : ctxt) (blk : Ll.block) : ins list = failwith ""
 
 let compile_lbl_block fn lbl ctxt blk : elem =
   Asm.text (mk_lbl fn lbl) (compile_block fn ctxt blk)
@@ -464,7 +457,7 @@ let compile_fdecl
   : prog
   =
   let prologue_elem = prologue name fdecl in
-  [ prologue_elem ]
+  failwith ""
 ;;
 
 (* compile_gdecl ------------------------------------------------------------ *)
