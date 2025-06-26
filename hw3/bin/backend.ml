@@ -265,7 +265,8 @@ let compile_gep (ctxt : ctxt) (op : Ll.ty * Ll.operand) (path : Ll.operand list)
    - Bitcast: does nothing interesting at the assembly level
 *)
 let compile_insn (ctxt : ctxt) ((uid : uid), (i : Ll.insn)) : X86.ins list =
-  let { tdecls = _; layout } = ctxt in
+  let { tdecls; layout } = ctxt in
+  let dest_operand = Ind3 (Lit (layout_loc layout uid), Rbp) in
   match i with
   | Binop (bop, ty, op1, op2) ->
     if ty <> I64
@@ -294,9 +295,28 @@ let compile_insn (ctxt : ctxt) ((uid : uid), (i : Ll.insn)) : X86.ins list =
       let rev_ins_list =
         (llbop_to_opcode bop, [ Reg Rcx; Reg R11 ]) :: load_operand_ins
       in
-      let dest_loc = layout_loc layout uid in
-      let rev_ins_list = (Movq, [ Reg R11; Ind3 (Lit dest_loc, Rbp) ]) :: rev_ins_list in
+      let rev_ins_list = (Movq, [ Reg R11; dest_operand ]) :: rev_ins_list in
       List.rev rev_ins_list)
+  | Icmp (cnd, ty, op1, op2) ->
+    let cond = compile_cnd cnd in
+    let head =
+      [ compile_operand ctxt (Reg R10) op2; compile_operand ctxt (Reg R11) op1 ]
+    in
+    let ins_list =
+      [ Cmpq, [ Reg R10; Reg R11 ]
+      ; Set cond, [dest_operand]
+      ]
+    in
+    head @ ins_list
+  | Alloca ty ->
+    let size = Int64.of_int (size_ty tdecls ty) in
+    [ Subq, [ Imm (Lit size); Reg Rsp ]; Movq, [ Reg Rsp; dest_operand ] ]
+  | Load (ty, ptr) ->
+    let load_insn = compile_operand ctxt (Reg Rax) ptr in
+    load_insn :: [ Movq, [ Ind2 Rax; dest_operand ] ]
+  | Store (ty, ptr, operand) ->
+    let load_insns = [compile_operand ctxt (Reg Rax) ptr; compile_operand ctxt (Reg R10) operand] in
+    load_insns @ [(Movq,[Reg R10; Ind2(Rax)])]
   | _ -> failwith "compile_insn: Not implemented yet!"
 ;;
 
