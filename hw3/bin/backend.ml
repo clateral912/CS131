@@ -313,7 +313,7 @@ let compile_insn (ctxt : ctxt) ((uid : uid), (i : Ll.insn)) : X86.ins list =
     [ Subq, [ Imm (Lit size); Reg Rsp ]; Movq, [ Reg Rsp; dest_operand ] ]
   | Load (ty, ptr) ->
     let load_insn = compile_operand ctxt (Reg Rax) ptr in
-    load_insn :: [ Movq, [ Ind2 Rax; dest_operand ] ]
+    load_insn :: [ Movq, [ Ind2 Rax; Reg Rax ] ; Movq, [ Reg Rax; dest_operand ] ]
   | Store (ty, ptr, operand) ->
     let load_insns = [compile_operand ctxt (Reg Rax) ptr; compile_operand ctxt (Reg R10) operand] in
     load_insns @ [(Movq,[Reg R10; Ind2(Rax)])]
@@ -416,6 +416,7 @@ let arg_loc (n : int) : operand =
    - see the discussion about locals
 *)
 (* Layout结构：lbl_blocks(term_uid :: uids) :: entry_block(term_uid :: uids) :: args *)
+(* size的单位是个， 而非byte*)
 let stack_layout (args : uid list) (cfg : cfg) : layout * quad =
   let rec args_layout (args : uid list) (size : int64) (layout : layout) : layout * quad =
     match args with
@@ -463,8 +464,10 @@ let move_args_asm (layout : layout) (args : uid list) : ins list =
 let prologue (name : string) (params : uid list) (layout : layout) (stack_size : quad)
   : ins list
   =
-  let move_code = move_args_asm layout params in
-  allocate_stack stack_size move_code
+  let adjust_rbp = [Movq, [Reg Rsp; Reg Rbp]] in
+  let save_rbp_ins = (Pushq, [Reg Rbp]) :: adjust_rbp in
+  let move_args = save_rbp_ins @ move_args_asm layout params in
+  allocate_stack stack_size move_args
 ;;
 
 (* The code for the entry-point of a function must do several things:
@@ -495,7 +498,7 @@ let compile_fdecl
   let entry_block, blocks = f_cfg in
   (*加上entry块的所有基本块*)
   let entry_block_insns = compile_block name ctxt entry_block in
-  let prologue_insns = prologue name f_param f_layout f_stack_size in
+  let prologue_insns = prologue name f_param f_layout (f_stack_size *. 8L) in
   let entry_elem : elem =
     { lbl = name; global = true; asm = Text (prologue_insns @ entry_block_insns) }
   in

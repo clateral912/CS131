@@ -73,6 +73,7 @@ let c_link_test c_files path args =
   let _ = Platform.sh (Printf.sprintf "rm -f %s %s" dot_s_file exec_file) Platform.ignore_error in
     Int64.of_int result
 
+(* fn为filename *)
 let executed tests =
   List.map (fun (fn, ans) ->
       fn, assert_eqf (fun () -> exec_e2e_file fn "") ans)

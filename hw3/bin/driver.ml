@@ -88,6 +88,7 @@ let run_program (args:string) (executable:string) (tmp_out:string) : string =
   let fi = open_in tmp_out in
   let result = string_of_file fi in
   let _ = close_in fi in
+  print_string ("---:" ^ result ^ "\n");
     result
 
 
