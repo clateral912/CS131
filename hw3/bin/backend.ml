@@ -2,6 +2,7 @@
 
 open Ll
 open X86
+open Llutil
 module Platform = Util.Platform
 
 (* Overview ----------------------------------------------------------------- *)
@@ -302,21 +303,19 @@ let compile_insn (ctxt : ctxt) ((uid : uid), (i : Ll.insn)) : X86.ins list =
     let head =
       [ compile_operand ctxt (Reg R10) op2; compile_operand ctxt (Reg R11) op1 ]
     in
-    let ins_list =
-      [ Cmpq, [ Reg R10; Reg R11 ]
-      ; Set cond, [dest_operand]
-      ]
-    in
+    let ins_list = [ Cmpq, [ Reg R10; Reg R11 ]; Set cond, [ dest_operand ] ] in
     head @ ins_list
   | Alloca ty ->
     let size = Int64.of_int (size_ty tdecls ty) in
     [ Subq, [ Imm (Lit size); Reg Rsp ]; Movq, [ Reg Rsp; dest_operand ] ]
   | Load (ty, ptr) ->
     let load_insn = compile_operand ctxt (Reg Rax) ptr in
-    load_insn :: [ Movq, [ Ind2 Rax; Reg Rax ] ; Movq, [ Reg Rax; dest_operand ] ]
-  | Store (ty, ptr, operand) ->
-    let load_insns = [compile_operand ctxt (Reg Rax) ptr; compile_operand ctxt (Reg R10) operand] in
-    load_insns @ [(Movq,[Reg R10; Ind2(Rax)])]
+    load_insn :: [ Movq, [ Ind2 Rax; Reg Rax ]; Movq, [ Reg Rax; dest_operand ] ]
+  | Store (ty, operand, ptr) ->
+    let load_insns =
+      [ compile_operand ctxt (Reg Rax) ptr; compile_operand ctxt (Reg R10) operand ]
+    in
+    load_insns @ [ Movq, [ Reg R10; Ind2 Rax ] ]
   | _ -> failwith "compile_insn: Not implemented yet!"
 ;;
 
@@ -340,14 +339,14 @@ let mk_lbl (fn : string) (l : string) = fn ^ "." ^ l
 *)
 let compile_terminator (fn : string) (ctxt : ctxt) (t : Ll.terminator) : ins list =
   match t with
-  | Br lbl -> [ Jmp, [ Imm (Lbl lbl) ] ]
+  | Br lbl -> [ Jmp, [ Imm (Lbl (mk_lbl fn lbl)) ] ]
   | Cbr (cnd, lbl1, lbl2) ->
     (* 注意！LLVM IR不允许Gid直接作为Cnd比较对象！比较对象必须为i1！无论如何你都要将其加载到Rax中！*)
     let load_cnd_ins = compile_operand ctxt (Reg Rax) cnd in
     [ load_cnd_ins ]
     @ [ Cmpq, [ Imm (Lit 0L); Reg Rax ]
-      ; J Neq, [ Imm (Lbl lbl1) ]
-      ; Jmp, [ Imm (Lbl lbl2) ]
+      ; J Neq, [ Imm (Lbl (mk_lbl fn lbl1)) ]
+      ; Jmp, [ Imm (Lbl (mk_lbl fn lbl2)) ]
       ]
   | Ret (_, None) -> [ Movq, [ Reg Rbp; Reg Rsp ]; Popq, [ Reg Rbp ]; Retq, [] ]
   (* TODO： 弄清楚ty的作用 *)
@@ -464,8 +463,8 @@ let move_args_asm (layout : layout) (args : uid list) : ins list =
 let prologue (name : string) (params : uid list) (layout : layout) (stack_size : quad)
   : ins list
   =
-  let adjust_rbp = [Movq, [Reg Rsp; Reg Rbp]] in
-  let save_rbp_ins = (Pushq, [Reg Rbp]) :: adjust_rbp in
+  let adjust_rbp = [ Movq, [ Reg Rsp; Reg Rbp ] ] in
+  let save_rbp_ins = (Pushq, [ Reg Rbp ]) :: adjust_rbp in
   let move_args = save_rbp_ins @ move_args_asm layout params in
   allocate_stack stack_size move_args
 ;;
@@ -502,7 +501,10 @@ let compile_fdecl
   let entry_elem : elem =
     { lbl = name; global = true; asm = Text (prologue_insns @ entry_block_insns) }
   in
-  let f ((lbl, block) : lbl * block) : elem = compile_lbl_block name lbl ctxt block in
+  let f ((lbl, block) : lbl * block) : elem =
+    print_string (lbl);
+    compile_lbl_block name lbl ctxt block
+  in
   entry_elem :: List.map f blocks
 ;;
 
