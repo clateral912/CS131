@@ -392,6 +392,9 @@ let compile_insn (ctxt : ctxt) ((uid : uid), (i : Ll.insn)) : X86.ins list =
     let prepare_call = compile_call ctxt (ty, operand, arg_list) in
     let get_retval = [(Movq, [Reg Rax; dest_operand])] in
     prepare_call @ get_retval
+  | Bitcast (_, src_operand, _) -> 
+    let mv_src_operand = compile_operand ctxt (Reg Rax) src_operand in
+    [mv_src_operand; (Movq, [Reg Rax; dest_operand])]
   | _ -> failwith "compile_insn: Not implemented yet!"
 ;;
 
