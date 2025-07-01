@@ -373,8 +373,10 @@ let compile_insn (ctxt : ctxt) ((uid : uid), (i : Ll.insn)) : X86.ins list =
     let head =
       [ compile_operand ctxt (Reg R10) op2; compile_operand ctxt (Reg R11) op1 ]
     in
+    (* IMPORTANT: 不使用set指令，因为set只会更改低八位为0*)
     let ins_list = [ Cmpq, [ Reg R10; Reg R11 ]; Set cond, [ dest_operand ] ] in
-    head @ ins_list
+    let clear_bits = [Andq, [Imm(Lit 1L); dest_operand]] in
+    head @ ins_list @ clear_bits
   | Alloca ty ->
     let size = Int64.of_int (size_ty tdecls ty) in
     [ Subq, [ Imm (Lit size); Reg Rsp ]; Movq, [ Reg Rsp; dest_operand ] ]
