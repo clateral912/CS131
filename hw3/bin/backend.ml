@@ -74,6 +74,28 @@ type ctxt =
 (* useful for looking up items in tdecls or layouts *)
 let lookup m x = List.assoc x m
 
+(* Complete this helper function, which computes the location of the nth incoming
+   function argument: either in a register or relative to %rbp,
+   according to the calling conventions. We will test this function as part of
+   the hidden test cases.
+
+   You might find it useful for compile_fdecl.
+
+   [ NOTE: the first six arguments are numbered 0 .. 5 ]
+*)
+(* 返回caller栈帧中args相对新rbp的位置offset，注意，caller的栈帧在高地址！因此你的地址是rbp + n
+   而非rbp - n*)
+let arg_loc (n : int) : operand =
+  match n with
+  | 0 -> Reg Rdi
+  | 1 -> Reg Rsi
+  | 2 -> Reg Rdx
+  | 3 -> Reg Rcx
+  | 4 -> Reg R08
+  | 5 -> Reg R09
+  | x -> Ind3 (Lit (8L +. (Int64.of_int (x - 5) *. 8L)), Rbp)
+;;
+
 (* compiling operands  ------------------------------------------------------ *)
 
 (* LLVM IR instructions support several kinds of operands.
@@ -242,6 +264,54 @@ let compile_gep (ctxt : ctxt) (op : Ll.ty * Ll.operand) (path : Ll.operand list)
   failwith "compile_gep not implemented"
 ;;
 
+(* prefix the function name [fn] to a label to ensure that the X86 labels are
+   globally unique . *)
+let mk_lbl (fn : string) (l : string) = fn ^ "." ^ l
+
+(* 设置参数, push多余参数到stack上，Jump到对应的global label*)
+let compile_call
+  ({ tdecls; layout } : ctxt)
+  (call_args : ty * Ll.operand * (ty * Ll.operand) list)
+  : X86.ins list
+  =
+  let _, fn, args = call_args in
+  let fn =
+    match fn with
+    | Gid gid -> gid
+    | _ -> failwith "compile_call: illegal function name!"
+  in
+  let convert_operand ((_, operand) : ty * Ll.operand) : X86.operand =
+    match operand with
+    | Null -> Imm (Lit 0L)
+    | Const x -> Imm (Lit x)
+    | Gid gid -> Imm (Lbl (mk_lbl fn gid))
+    | Id uid -> lookup layout uid
+  in
+  (*[arg1, arg2, arg3, arg4, arg5,arg6, arg7,arg8] -->
+    [arg1, arg2, arg3, arg4, arg5,arg6]  [arg7,arg8]*)
+  let rec seperate
+    (cnt : int)
+    (reg_args : (ty * Ll.operand) list)
+    (stack_args : (ty * Ll.operand) list)
+    : (ty * Ll.operand) list * (ty * Ll.operand) list
+    =
+    if cnt > 6
+    then reg_args, stack_args
+    else (
+      match stack_args with
+      | [] -> reg_args, []
+      | arg :: tl -> seperate (cnt + 1) (reg_args @ [ arg ]) tl)
+  in
+  let reg_args, stack_args = seperate 1 [] args in
+  let stack_args = List.rev stack_args in
+  let setup_reg (idx : int) (arg : ty * Ll.operand) : X86.ins =
+    Movq, [ convert_operand arg; arg_loc idx ]
+  in
+  let setup_stack (arg : ty * Ll.operand) : X86.ins = Pushq, [ convert_operand arg ] in
+  let call_ins = [Callq, [Imm(Lbl fn)]] in
+  List.mapi setup_reg reg_args @ List.map setup_stack stack_args @ call_ins
+;;
+
 (* compiling instructions  -------------------------------------------------- *)
 
 (* The result of compiling a single LLVM instruction might be many x86
@@ -316,14 +386,14 @@ let compile_insn (ctxt : ctxt) ((uid : uid), (i : Ll.insn)) : X86.ins list =
       [ compile_operand ctxt (Reg Rax) ptr; compile_operand ctxt (Reg R10) operand ]
     in
     load_insns @ [ Movq, [ Reg R10; Ind2 Rax ] ]
+  | Call (ty, operand, arg_list) -> 
+    let prepare_call = compile_call ctxt (ty, operand, arg_list) in
+    let get_retval = [(Movq, [Reg Rax; dest_operand])] in
+    prepare_call @ get_retval
   | _ -> failwith "compile_insn: Not implemented yet!"
 ;;
 
 (* compiling terminators  --------------------------------------------------- *)
-
-(* prefix the function name [fn] to a label to ensure that the X86 labels are
-   globally unique . *)
-let mk_lbl (fn : string) (l : string) = fn ^ "." ^ l
 
 (* Compile block terminators is not too difficult:
 
@@ -381,28 +451,6 @@ let compile_lbl_block fn lbl ctxt blk : elem =
 ;;
 
 (* compile_fdecl ------------------------------------------------------------ *)
-
-(* Complete this helper function, which computes the location of the nth incoming
-   function argument: either in a register or relative to %rbp,
-   according to the calling conventions. We will test this function as part of
-   the hidden test cases.
-
-   You might find it useful for compile_fdecl.
-
-   [ NOTE: the first six arguments are numbered 0 .. 5 ]
-*)
-(* 返回caller栈帧中args相对新rbp的位置offset，注意，caller的栈帧在高地址！因此你的地址是rbp + n
-   而非rbp - n*)
-let arg_loc (n : int) : operand =
-  match n with
-  | 0 -> Reg Rdi
-  | 1 -> Reg Rsi
-  | 2 -> Reg Rdx
-  | 3 -> Reg Rcx
-  | 4 -> Reg R08
-  | 5 -> Reg R09
-  | x -> Ind3 (Lit (8L +. (Int64.of_int (x - 5) *. 8L)), Rbp)
-;;
 
 (* 减去Iret *)
 
@@ -502,7 +550,7 @@ let compile_fdecl
     { lbl = name; global = true; asm = Text (prologue_insns @ entry_block_insns) }
   in
   let f ((lbl, block) : lbl * block) : elem =
-    print_string (lbl);
+    print_string lbl;
     compile_lbl_block name lbl ctxt block
   in
   entry_elem :: List.map f blocks
