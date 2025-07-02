@@ -124,7 +124,8 @@ let arg_loc (n : int) : operand =
    destination (usually a register).
 *)
 (* 将Null Const和Id的引用解析到值，对于全局变量，我们只是将全局变量的地址存入dest中，而不是搬运全局变量的值 *)
-let compile_operand ({ tdecls; layout } : ctxt) (dest : X86.operand) : Ll.operand -> ins
+let compile_operand ({ tdecls = _; layout } : ctxt) (dest : X86.operand)
+  : Ll.operand -> ins
   = function
   | Null -> Movq, [ Imm (Lit 0L); dest ]
   | Const x -> Movq, [ Imm (Lit x); dest ]
@@ -233,6 +234,22 @@ let rec size_ty (tdecls : (tid * ty) list) (t : Ll.ty) : int =
     List.fold_left f 0 ty_list
 ;;
 
+(* 计算一个数据结构从开头到第n个给定位置的内存偏移量为多少, 并返回对应index为什么类型*)
+let rec ty_offset (tdecls : (tid * ty) list) (ty : ty) (idx : int) : int * ty =
+  match ty with
+  | Namedt name -> ty_offset tdecls (lookup tdecls name) idx
+  | Array (_, t) -> idx * size_ty tdecls t, t
+  | Struct ty_list ->
+    let take (n : int) (lst : ty list) : ty list =
+      lst |> List.to_seq |> Seq.take n |> List.of_seq
+    in
+    let f (acc : int) (ty : ty) : int = size_ty tdecls ty + acc in
+    (* 取ty_list的前n个元素 *)
+    let pruned_ty_list = take idx ty_list in
+    List.fold_left f 0 pruned_ty_list, List.nth ty_list idx
+  | _ -> failwith "ty_offset: illegal type!"
+;;
+
 (* Generates code that computes a pointer value.
 
    1. op must be of pointer type: t*
@@ -258,10 +275,44 @@ let rec size_ty (tdecls : (tid * ty) list) (t : Ll.ty) : int =
    in (4), but relative to the type f the sub-element picked out
    by the path so far
 *)
-let compile_gep (ctxt : ctxt) (op : Ll.ty * Ll.operand) (path : Ll.operand list)
+(* 输入为当前IR的上下文ctxt, 准备index_into 的数据类型op_ty, 进入数据类型的path
+   以及当前相对于数据结构开头的offset，当path穷尽后，返回最终的offset *)
+let rec gepty
+  ({ tdecls; layout = _ } as ctxt : ctxt)
+  (op_ty : Ll.ty)
+  (path : Ll.operand list)
+  (offset : int) (* 到当前位置的偏移量 *)
+  : int
+  =
+  match path with
+  | [] -> offset
+  | index :: path_tl ->
+    let idx =
+      match index with
+      | Const idx -> Int64.to_int idx
+      | _ -> failwith "getpy: Illgeal Path!"
+    in
+    let inside_offset, inside_ty = ty_offset tdecls op_ty idx in
+    gepty ctxt inside_ty path_tl (offset + inside_offset)
+;;
+
+(* 将得到的指针放入Rax寄存器中 *)
+let compile_gep
+  ({ tdecls; layout = _ } as ctxt : ctxt)
+  (op : Ll.ty * Ll.operand)
+  (path : Ll.operand list)
   : ins list
   =
-  failwith "compile_gep not implemented"
+  let op_ty, operand = op in
+  let first_index, path_tl =
+    match path with
+    | Const m :: tl -> Int64.to_int m, tl
+    | _ -> failwith "compile_gep: Illegal Path!"
+  in
+  let first_offset = first_index * size_ty tdecls op_ty in
+  let final_offset = gepty ctxt op_ty path_tl first_offset |> Int64.of_int in
+  let get_ptr_ins = compile_operand ctxt (Reg R10) operand in
+  [ get_ptr_ins ] @ [ Leaq, [ Ind3 (Lit final_offset, R10); Reg Rax ] ]
 ;;
 
 (* prefix the function name [fn] to a label to ensure that the X86 labels are
@@ -308,7 +359,7 @@ let compile_call
     Movq, [ convert_operand arg; arg_loc idx ]
   in
   let setup_stack (arg : ty * Ll.operand) : X86.ins = Pushq, [ convert_operand arg ] in
-  let call_ins = [Callq, [Imm(Lbl fn)]] in
+  let call_ins = [ Callq, [ Imm (Lbl fn) ] ] in
   List.mapi setup_reg reg_args @ List.map setup_stack stack_args @ call_ins
 ;;
 
@@ -368,34 +419,37 @@ let compile_insn (ctxt : ctxt) ((uid : uid), (i : Ll.insn)) : X86.ins list =
       in
       let rev_ins_list = (Movq, [ Reg R11; dest_operand ]) :: rev_ins_list in
       List.rev rev_ins_list)
-  | Icmp (cnd, ty, op1, op2) ->
+  | Icmp (cnd, _, op1, op2) ->
     let cond = compile_cnd cnd in
     let head =
       [ compile_operand ctxt (Reg R10) op2; compile_operand ctxt (Reg R11) op1 ]
     in
     (* IMPORTANT: 不使用set指令，因为set只会更改低八位为0*)
     let ins_list = [ Cmpq, [ Reg R10; Reg R11 ]; Set cond, [ dest_operand ] ] in
-    let clear_bits = [Andq, [Imm(Lit 1L); dest_operand]] in
+    let clear_bits = [ Andq, [ Imm (Lit 1L); dest_operand ] ] in
     head @ ins_list @ clear_bits
   | Alloca ty ->
     let size = Int64.of_int (size_ty tdecls ty) in
     [ Subq, [ Imm (Lit size); Reg Rsp ]; Movq, [ Reg Rsp; dest_operand ] ]
-  | Load (ty, ptr) ->
+  | Load (_, ptr) ->
     let load_insn = compile_operand ctxt (Reg Rax) ptr in
     load_insn :: [ Movq, [ Ind2 Rax; Reg Rax ]; Movq, [ Reg Rax; dest_operand ] ]
-  | Store (ty, operand, ptr) ->
+  | Store (_, operand, ptr) ->
     let load_insns =
       [ compile_operand ctxt (Reg Rax) ptr; compile_operand ctxt (Reg R10) operand ]
     in
     load_insns @ [ Movq, [ Reg R10; Ind2 Rax ] ]
-  | Call (ty, operand, arg_list) -> 
+  | Call (ty, operand, arg_list) ->
     let prepare_call = compile_call ctxt (ty, operand, arg_list) in
-    let get_retval = [(Movq, [Reg Rax; dest_operand])] in
+    let get_retval = [ Movq, [ Reg Rax; dest_operand ] ] in
     prepare_call @ get_retval
-  | Bitcast (_, src_operand, _) -> 
+  | Bitcast (_, src_operand, _) ->
     let mv_src_operand = compile_operand ctxt (Reg Rax) src_operand in
-    [mv_src_operand; (Movq, [Reg Rax; dest_operand])]
-  | _ -> failwith "compile_insn: Not implemented yet!"
+    [ mv_src_operand; Movq, [ Reg Rax; dest_operand ] ]
+  | Gep (ty, operand, path) ->
+    let gep_ins =  compile_gep ctxt (ty, operand) path in
+    let move_to_dest = [Movq, [Reg Rax; dest_operand]] in
+    gep_ins @ move_to_dest
 ;;
 
 (* compiling terminators  --------------------------------------------------- *)
@@ -513,7 +567,7 @@ let move_args_asm (layout : layout) (args : uid list) : ins list =
   List.flatten @@ List.mapi handle_arg args
 ;;
 
-let prologue (name : string) (params : uid list) (layout : layout) (stack_size : quad)
+let prologue (_ : string) (params : uid list) (layout : layout) (stack_size : quad)
   : ins list
   =
   let adjust_rbp = [ Movq, [ Reg Rsp; Reg Rbp ] ] in
@@ -542,7 +596,7 @@ let prologue (name : string) (params : uid list) (layout : layout) (stack_size :
 let compile_fdecl
   (tdecls : (tid * ty) list)
   (name : string)
-  ({ f_param; f_cfg; _ } as fdecl : fdecl)
+  ({ f_param; f_cfg; _ } : fdecl)
   : prog
   =
   let f_layout, f_stack_size = stack_layout f_param f_cfg in
