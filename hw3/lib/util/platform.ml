@@ -225,6 +225,12 @@ let assemble (dot_s : string) (dot_o : string) : unit =
 
 
 let link (mods : string list) (out_fn : string) : unit =
+  let mod_name = 
+    match mods with
+    | [] -> "\nNO_MODENAME\n"
+    | _ -> String.concat " " mods ^ "\n"
+  in
+  print_string mod_name;
   sh
     (sprintf
        "%s%s %s %s %s %s"

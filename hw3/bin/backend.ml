@@ -131,7 +131,7 @@ let compile_operand ({ tdecls = _; layout } : ctxt) (dest : X86.operand)
   | Const x -> Movq, [ Imm (Lit x); dest ]
   | Gid gid ->
     let gid_label = Platform.mangle gid in
-    Leaq, [ Ind3 (Lbl gid_label, Rip); Reg Rax ]
+    Leaq, [ Ind3 (Lbl gid_label, Rip); dest ]
   | Id uid ->
     let arg_operand = lookup layout uid in
     Movq, [ arg_operand; dest ]
@@ -235,10 +235,10 @@ let rec size_ty (tdecls : (tid * ty) list) (t : Ll.ty) : int =
 ;;
 
 (* 计算一个数据结构从开头到第n个给定位置的内存偏移量为多少, 并返回对应index为什么类型*)
-let rec ty_offset (tdecls : (tid * ty) list) (ty : ty) (idx : int) : int * ty =
+let rec ty_offset (tdecls : (tid * ty) list) (ty : ty) (idx : int) : quad * ty =
   match ty with
   | Namedt name -> ty_offset tdecls (lookup tdecls name) idx
-  | Array (_, t) -> idx * size_ty tdecls t, t
+  | Array (_, t) -> idx * size_ty tdecls t |> Int64.of_int, t
   | Struct ty_list ->
     let take (n : int) (lst : ty list) : ty list =
       lst |> List.to_seq |> Seq.take n |> List.of_seq
@@ -246,8 +246,10 @@ let rec ty_offset (tdecls : (tid * ty) list) (ty : ty) (idx : int) : int * ty =
     let f (acc : int) (ty : ty) : int = size_ty tdecls ty + acc in
     (* 取ty_list的前n个元素 *)
     let pruned_ty_list = take idx ty_list in
-    List.fold_left f 0 pruned_ty_list, List.nth ty_list idx
-  | _ -> failwith "ty_offset: illegal type!"
+    List.fold_left f 0 pruned_ty_list |> Int64.of_int, List.nth ty_list idx
+  | _ ->
+    print_string ("-----\n" ^ string_of_ty ty ^ "\n-----\n");
+    failwith "ty_offset: illegal type!"
 ;;
 
 (* Generates code that computes a pointer value.
@@ -277,23 +279,31 @@ let rec ty_offset (tdecls : (tid * ty) list) (ty : ty) (idx : int) : int * ty =
 *)
 (* 输入为当前IR的上下文ctxt, 准备index_into 的数据类型op_ty, 进入数据类型的path
    以及当前相对于数据结构开头的offset，当path穷尽后，返回最终的offset *)
+(* 使用R09做计算寄存器*)
 let rec gepty
-  ({ tdecls; layout = _ } as ctxt : ctxt)
+  ({ tdecls; layout } as ctxt : ctxt)
   (op_ty : Ll.ty)
   (path : Ll.operand list)
-  (offset : int) (* 到当前位置的偏移量 *)
-  : int
+  (ins_list : ins list) (* 到当前位置的偏移量 *)
+  : ins list
   =
   match path with
-  | [] -> offset
+  | [] -> ins_list
   | index :: path_tl ->
-    let idx =
-      match index with
-      | Const idx -> Int64.to_int idx
-      | _ -> failwith "getpy: Illgeal Path!"
-    in
-    let inside_offset, inside_ty = ty_offset tdecls op_ty idx in
-    gepty ctxt inside_ty path_tl (offset + inside_offset)
+    (match index with
+     | Const idx ->
+       let idx = Int64.to_int idx in
+       let inside_offset, inside_ty = ty_offset tdecls op_ty idx in
+       ins_list @ [ Addq, [ Imm (Lit inside_offset); Reg R09 ] ]
+       |> gepty ctxt inside_ty path_tl
+     | Id uid ->
+       (* 默认是数组 *)
+       let var = lookup layout uid in
+       let get_multiplier_ins = [Movq, [Imm (Lit (size_ty tdecls op_ty |> Int64.of_int)); Reg R08]] in
+       let calc_offset_ins = [Imulq, [var; Reg R08]] in
+       let accum_offset_ins = [ Addq, [ Reg R08; Reg R09 ] ] in
+       ins_list @  get_multiplier_ins @ calc_offset_ins @ accum_offset_ins |> gepty ctxt op_ty path_tl
+     | _ -> failwith "gepty: Illegal Operand!")
 ;;
 
 (* 将得到的指针放入Rax寄存器中 *)
@@ -304,15 +314,28 @@ let compile_gep
   : ins list
   =
   let op_ty, operand = op in
+  let op_ty =
+    match op_ty with
+    | Ptr ty -> ty
+    | _ -> failwith "gepty: Not a ptr!"
+  in
   let first_index, path_tl =
     match path with
-    | Const m :: tl -> Int64.to_int m, tl
+    | Const m :: tl -> m, tl
     | _ -> failwith "compile_gep: Illegal Path!"
   in
-  let first_offset = first_index * size_ty tdecls op_ty in
-  let final_offset = gepty ctxt op_ty path_tl first_offset |> Int64.of_int in
-  let get_ptr_ins = compile_operand ctxt (Reg R10) operand in
-  [ get_ptr_ins ] @ [ Leaq, [ Ind3 (Lit final_offset, R10); Reg Rax ] ]
+  let clear_r09_ins = [ Movq, [ Imm (Lit 0L); Reg R09 ] ] in
+  let first_offset_ins = [ Addq, [ Imm (Lit first_index); Reg R09 ] ] in
+  let calc_offset_ins = gepty ctxt op_ty path_tl first_offset_ins in
+  (* 最终offset在R09中 *)
+  let load_operand_ins = [ compile_operand ctxt (Reg R11) operand ] in
+  let final_addr_ins = [ Addq, [ Reg R09; Reg R11 ] ] in
+  let move_final_addr_ins = [ Movq, [ Reg R11; Reg Rax ] ] in
+  clear_r09_ins
+  @ calc_offset_ins
+  @ load_operand_ins
+  @ final_addr_ins
+  @ move_final_addr_ins
 ;;
 
 (* prefix the function name [fn] to a label to ensure that the X86 labels are
@@ -447,8 +470,8 @@ let compile_insn (ctxt : ctxt) ((uid : uid), (i : Ll.insn)) : X86.ins list =
     let mv_src_operand = compile_operand ctxt (Reg Rax) src_operand in
     [ mv_src_operand; Movq, [ Reg Rax; dest_operand ] ]
   | Gep (ty, operand, path) ->
-    let gep_ins =  compile_gep ctxt (ty, operand) path in
-    let move_to_dest = [Movq, [Reg Rax; dest_operand]] in
+    let gep_ins = compile_gep ctxt (ty, operand) path in
+    let move_to_dest = [ Movq, [ Reg Rax; dest_operand ] ] in
     gep_ins @ move_to_dest
 ;;
 
@@ -608,10 +631,7 @@ let compile_fdecl
   let entry_elem : elem =
     { lbl = name; global = true; asm = Text (prologue_insns @ entry_block_insns) }
   in
-  let f ((lbl, block) : lbl * block) : elem =
-    print_string lbl;
-    compile_lbl_block name lbl ctxt block
-  in
+  let f ((lbl, block) : lbl * block) : elem = compile_lbl_block name lbl ctxt block in
   entry_elem :: List.map f blocks
 ;;
 
