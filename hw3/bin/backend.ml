@@ -299,16 +299,19 @@ let rec gepty
      | Id uid ->
        (* 默认是数组 *)
        let var = lookup layout uid in
-       let get_multiplier_ins = [Movq, [Imm (Lit (size_ty tdecls op_ty |> Int64.of_int)); Reg R08]] in
-       let calc_offset_ins = [Imulq, [var; Reg R08]] in
+       let get_multiplier_ins =
+         [ Movq, [ Imm (Lit (size_ty tdecls op_ty |> Int64.of_int)); Reg R08 ] ]
+       in
+       let calc_offset_ins = [ Imulq, [ var; Reg R08 ] ] in
        let accum_offset_ins = [ Addq, [ Reg R08; Reg R09 ] ] in
-       ins_list @  get_multiplier_ins @ calc_offset_ins @ accum_offset_ins |> gepty ctxt op_ty path_tl
+       ins_list @ get_multiplier_ins @ calc_offset_ins @ accum_offset_ins
+       |> gepty ctxt op_ty path_tl
      | _ -> failwith "gepty: Illegal Operand!")
 ;;
 
 (* 将得到的指针放入Rax寄存器中 *)
 let compile_gep
-  ({ tdecls; layout = _ } as ctxt : ctxt)
+  ({ tdecls = _; layout = _ } as ctxt : ctxt)
   (op : Ll.ty * Ll.operand)
   (path : Ll.operand list)
   : ins list
@@ -325,7 +328,8 @@ let compile_gep
     | _ -> failwith "compile_gep: Illegal Path!"
   in
   let clear_r09_ins = [ Movq, [ Imm (Lit 0L); Reg R09 ] ] in
-  let first_offset_ins = [ Addq, [ Imm (Lit first_index); Reg R09 ] ] in
+  (* 注意乘8, LLVM Lite的内存虽然是byte addressable的，但是你只能使用八位对其的内存*)
+  let first_offset_ins = [ Addq, [ Imm (Lit (first_index *. 8L)); Reg R09 ] ] in
   let calc_offset_ins = gepty ctxt op_ty path_tl first_offset_ins in
   (* 最终offset在R09中 *)
   let load_operand_ins = [ compile_operand ctxt (Reg R11) operand ] in
@@ -344,7 +348,7 @@ let mk_lbl (fn : string) (l : string) = fn ^ "." ^ l
 
 (* 设置参数, push多余参数到stack上，Jump到对应的global label*)
 let compile_call
-  ({ tdecls; layout } : ctxt)
+  ({ tdecls = _; layout } : ctxt)
   (call_args : ty * Ll.operand * (ty * Ll.operand) list)
   : X86.ins list
   =
@@ -358,7 +362,7 @@ let compile_call
     match operand with
     | Null -> Imm (Lit 0L)
     | Const x -> Imm (Lit x)
-    | Gid gid -> Imm (Lbl (mk_lbl fn gid))
+    | Gid _ -> failwith "convert_operand: Do not use gid!"
     | Id uid -> lookup layout uid
   in
   (*[arg1, arg2, arg3, arg4, arg5,arg6, arg7,arg8] -->
@@ -378,12 +382,24 @@ let compile_call
   in
   let reg_args, stack_args = seperate 1 [] args in
   let stack_args = List.rev stack_args in
-  let setup_reg (idx : int) (arg : ty * Ll.operand) : X86.ins =
-    Movq, [ convert_operand arg; arg_loc idx ]
+  let prev_alignment_ins = [ Andq, [ Imm (Lit (-16L)); Reg Rsp ] ] in
+  let post_alignment_ins = [ Subq, [ Imm (Lit 8L); Reg Rsp ] ] in
+  let stack_reg_len = List.length stack_args in
+  let setup_reg (idx : int) ((_, operand) as arg : ty * Ll.operand) : X86.ins =
+    match operand with 
+    (* 必须使用Leaq相对Rip来寻址全局label， 不可用Movq*)
+    | Gid gid -> Leaq, [Ind3(Lbl gid, Rip); arg_loc idx]
+    | _ ->  Movq, [ convert_operand arg; arg_loc idx ]   
   in
   let setup_stack (arg : ty * Ll.operand) : X86.ins = Pushq, [ convert_operand arg ] in
   let call_ins = [ Callq, [ Imm (Lbl fn) ] ] in
-  List.mapi setup_reg reg_args @ List.map setup_stack stack_args @ call_ins
+  let ins_list =
+    prev_alignment_ins
+    @ List.mapi setup_reg reg_args
+    @ List.map setup_stack stack_args
+    @ call_ins
+  in
+  if stack_reg_len mod 2 == 0 then ins_list else ins_list @ post_alignment_ins
 ;;
 
 (* compiling instructions  -------------------------------------------------- *)
@@ -647,7 +663,7 @@ let rec compile_ginit : ginit -> X86.data list = function
   | GArray gs | GStruct gs -> List.map compile_gdecl gs |> List.flatten
   | GBitcast (_t1, g, _t2) -> compile_ginit g
 
-and compile_gdecl (lbl, g) = compile_ginit g
+and compile_gdecl (_, g) = compile_ginit g
 
 (* compile_prog ------------------------------------------------------------- *)
 let compile_prog { tdecls; gdecls; fdecls; _ } : X86.prog =

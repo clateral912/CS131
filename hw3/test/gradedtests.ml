@@ -38,7 +38,6 @@ let exec_e2e_ast ll_ast args extra_files =
   let _ = Platform.verb @@ Printf.sprintf "** Executable exited with: %d\n" result in
   Int64.of_int result
 
-
 let exec_e2e_file path args =
   let ast = Driver.parse_ll_file path in
   exec_e2e_ast ast args []
